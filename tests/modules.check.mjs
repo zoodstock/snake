@@ -51,7 +51,20 @@ if (unmapped.length) {
   throw new Error('bare specifier(s) missing from the importmap: ' + unmapped.join(', '));
 }
 
+// Where the importmap points matters as much as what it names: three.js is
+// vendored in the repo now, and a moved or renamed vendor file would blank the
+// page exactly like a bad relative import. Local targets are fetched; a remote
+// one (back to a CDN) is left alone, since CI cannot reach it.
+const localTargets = Object.entries(imports)
+  .filter(([, target]) => target.startsWith('.') || target.startsWith('/'));
+for (const [specifier, target] of localTargets) {
+  const path = new URL(target, 'http://local/').pathname.slice(1);
+  const res = await fetch(base + '/' + path, { method: 'HEAD' });
+  if (!res.ok) throw new Error(`importmap ${specifier} → ${target} → HTTP ${res.status}`);
+}
+
 console.log('entry            : ' + entryMatch[1]);
 console.log('local modules    : ' + seen.size + ' (all fetched)');
 console.log('bare specifiers  : ' + ([...bare].map((s) => s + ' → ' + imports[s]).join(', ') || 'none'));
+console.log('importmap targets: ' + (localTargets.length ? localTargets.length + ' local (all fetched)' : 'none local'));
 console.log('\nOK: every import resolves');

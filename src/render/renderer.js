@@ -129,7 +129,9 @@ export class Renderer {
     this.scene.background = skyTexture();
     this.scene.fog = new THREE.Fog(PALETTE.fog, FOG_NEAR, FOG_FAR);
 
-    this.camera = new THREE.PerspectiveCamera(62, 1, 0.5, 320);
+    // far has to clear the ground's far corner (see render()), otherwise the far
+    // plane slices the fogged ground and puts the hard horizon back.
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.5, 460);
 
     this.scene.add(new THREE.HemisphereLight(PALETTE.skyHorizon, PALETTE.grassA, 1.15));
     this.sun = new THREE.DirectionalLight(0xfff3e0, 2.1);
@@ -315,10 +317,16 @@ export class Renderer {
   render(world, cam) {
     const arena = world.cfg.arena;
     if (this._groundSized !== arena) {
-      const size = (arena + 30) * 2;
+      // The ground has to reach a full fog distance past the arena on every
+      // side: anywhere the player can stand, the nearest edge is then at least
+      // FOG_FAR away and fades into the sky. At (arena + 30) the edge came out
+      // less than half fogged and read as a hard horizon line. Rounded up to a
+      // whole number of checker cells so the texture does not wrap mid-cell.
+      const cell = TILE * 2;
+      const size = Math.ceil((arena + FOG_FAR) * 2 / cell) * cell;
       this.ground.geometry.dispose();
       this.ground.geometry = new THREE.PlaneGeometry(size, size);
-      this.groundTexture.repeat.set(size / (TILE * 2), size / (TILE * 2));
+      this.groundTexture.repeat.set(size / cell, size / cell);
       this._groundSized = arena;
     }
 
