@@ -92,6 +92,25 @@
     return [x * c + z * s, -x * s + z * c];
   }
 
+  /**
+   * Turn a stick reading into a world heading, relative to where the camera is
+   * looking: pushing up means "away from the camera", left means "camera left".
+   * `sy` is positive up. Returns null inside the dead zone.
+   */
+  function stickToHeading(sx, sy, camYaw, deadZone) {
+    const dead = deadZone === undefined ? 0.24 : deadZone;
+    const magnitude = Math.hypot(sx, sy);
+    if (magnitude < dead) return null;
+    // Rescale so the usable range starts at the dead zone edge, not at zero.
+    const strength = clamp((magnitude - dead) / (1 - dead), 0, 1);
+    const fx = Math.sin(camYaw), fz = Math.cos(camYaw);
+    const rx = fz, rz = -fx;                       // camera right, on the ground plane
+    let x = fx * (sy / magnitude) + rx * (sx / magnitude);
+    let z = fz * (sy / magnitude) + rz * (sx / magnitude);
+    const len = Math.hypot(x, z) || 1;
+    return { x: x / len, z: z / len, strength };
+  }
+
   /** Hex string or 0xRRGGBB to a [r,g,b] triple in 0..1. */
   function color(hex) {
     const n = typeof hex === 'string' ? parseInt(hex.replace('#', ''), 16) : hex;
@@ -104,7 +123,7 @@
   }
 
   return {
-    TAU, clamp, lerp, smoothing, angleDelta, rotateY, color, mixColor,
+    TAU, clamp, lerp, smoothing, angleDelta, rotateY, stickToHeading, color, mixColor,
     mat4, identity, multiply, perspective, lookAt,
   };
 });

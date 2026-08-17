@@ -59,11 +59,19 @@
         pause: () => this.togglePause(),
         mute: () => this.toggleMute(),
         zoom: (d) => this.camera.addZoom(d),
+        stick: () => this.toggleStick(),
+        padConnected: () => this.showFlash('gamepad ready', true),
         anyInput: () => {
           this.sfx.unlock();
           if (this.state === 'menu') this.start();
         },
+      }, {
+        stickBase: document.getElementById('stickBase'),
+        stickKnob: document.getElementById('stickKnob'),
+        boostButton: document.getElementById('boostBtn'),
       });
+      this.stickBadge = document.getElementById('stickBadge');
+      this.updateStickBadge();
 
       this.canvas.addEventListener('pointerdown', () => {
         // Claim keyboard focus — the page may be running inside an iframe.
@@ -85,6 +93,7 @@
           if (action === 'start') { this.sfx.unlock(); this.start(); }
           else if (action === 'mute') this.toggleMute();
           else if (action === 'pause') this.togglePause();
+          else if (action === 'stick') this.toggleStick();
         });
       }
 
@@ -129,6 +138,16 @@
       this.sfx.unlock();
       const muted = this.sfx.toggleMute();
       if (this.muteBadge) this.muteBadge.textContent = muted ? 'muted' : 'sound on';
+    }
+
+    toggleStick() {
+      this.input.toggleStick();
+      this.updateStickBadge();
+      this.resize();
+    }
+
+    updateStickBadge() {
+      if (this.stickBadge) this.stickBadge.textContent = this.input.stickVisible ? 'stick on' : 'stick off';
     }
 
     showOverlay(kind) {
@@ -180,11 +199,12 @@
         this.resize();
       }
 
+      this.input.update();
       const world = this.world;
       if (this.state === 'playing') {
         // A little speed creep keeps long runs tense.
         world.player.speed = 11.5 + Math.min(4, world.score / 500);
-        const events = world.update(dt, { steer: this.input.steer, boost: this.input.boost });
+        const events = world.update(dt, { steer: this.readSteer(), boost: this.input.boost });
         this.handleEvents(events);
         this.camera.update(dt, world.player, true);
       } else if (this.state === 'dead') {
@@ -208,6 +228,22 @@
       this.renderer.render(world, this.camera);
       this.drawMinimap();
       this.updateHud(false);
+    }
+
+    /**
+     * Keyboard and drag give a turn rate directly. A stick gives a direction,
+     * read relative to the camera, which the snake then turns toward — so
+     * "push left" means left on screen no matter which way the snake faces.
+     */
+    readSteer() {
+      const keyed = this.input.steer;
+      if (keyed !== 0) return keyed;
+      const stick = this.input.stick;
+      if (!stick) return 0;
+      const heading = M3.stickToHeading(stick.x, stick.y, this.camera.yaw);
+      if (!heading) return 0;
+      const player = this.world.player;
+      return player.steerToward(player.x + heading.x * 8, player.z + heading.z * 8);
     }
 
     handleEvents(events) {

@@ -64,6 +64,70 @@ test('rotateY maps local +Z onto the heading', () => {
   assert.ok(Math.abs(z - Math.cos(yaw)) < 1e-9);
 });
 
+test('stickToHeading ignores the dead zone', () => {
+  assert.strictEqual(M3.stickToHeading(0, 0, 0), null);
+  assert.strictEqual(M3.stickToHeading(0.1, -0.1, 0), null, 'a resting thumb is not input');
+  assert.ok(M3.stickToHeading(0, 1, 0), 'a full push registers');
+});
+
+test('stickToHeading reads relative to the camera', () => {
+  // Camera looking along +Z: push up = +Z, push right = +X.
+  let h = M3.stickToHeading(0, 1, 0);
+  assert.ok(Math.abs(h.x) < 1e-6 && Math.abs(h.z - 1) < 1e-6, JSON.stringify(h));
+  h = M3.stickToHeading(1, 0, 0);
+  assert.ok(Math.abs(h.x - 1) < 1e-6 && Math.abs(h.z) < 1e-6, JSON.stringify(h));
+
+  // Camera turned a quarter turn: up now means +X, and right means -Z.
+  const yaw = Math.PI / 2;
+  h = M3.stickToHeading(0, 1, yaw);
+  assert.ok(Math.abs(h.x - 1) < 1e-6 && Math.abs(h.z) < 1e-6, JSON.stringify(h));
+  h = M3.stickToHeading(1, 0, yaw);
+  assert.ok(Math.abs(h.x) < 1e-6 && Math.abs(h.z + 1) < 1e-6, JSON.stringify(h));
+});
+
+test('stickToHeading always returns a unit direction with scaled strength', () => {
+  for (const [x, y] of [[0.5, 0.5], [-1, 0.2], [0.3, -0.9], [1, 1]]) {
+    const h = M3.stickToHeading(x, y, 0.7);
+    assert.ok(Math.abs(Math.hypot(h.x, h.z) - 1) < 1e-6, 'unit length');
+    assert.ok(h.strength > 0 && h.strength <= 1, 'strength in range: ' + h.strength);
+  }
+  const light = M3.stickToHeading(0, 0.3, 0);
+  const full = M3.stickToHeading(0, 1, 0);
+  assert.ok(light.strength < full.strength, 'a small push is weaker than a full one');
+  assert.ok(Math.abs(full.strength - 1) < 1e-6, 'a full push maxes out');
+});
+
+test('a snake steers toward where the stick points, the short way round', () => {
+  const camYaw = 0;
+  const s = new Snake({ x: 0, z: 0, yaw: 0 });
+  const aim = (sx, sy) => {
+    const h = M3.stickToHeading(sx, sy, camYaw);
+    return s.steerToward(s.x + h.x * 8, s.z + h.z * 8);
+  };
+  assert.ok(aim(1, 0.2) > 0, 'stick right turns right');
+  assert.ok(aim(-1, 0.2) < 0, 'stick left turns left');
+  assert.ok(Math.abs(aim(0, 1)) < 1e-6, 'stick forward holds the line');
+
+  // Facing the other way, screen-left must still mean turn toward screen-left.
+  s.yaw = Math.PI;
+  assert.ok(aim(-1, 0) > 0, 'sign follows the camera, not the snake');
+});
+
+test('a stick held down actually turns the snake around', () => {
+  const w = new World({ seed: 77 });
+  w.obstacles.length = 0;
+  w.foods.length = 0;
+  w.rivals.length = 0;
+  const start = w.player.yaw;
+  for (let i = 0; i < 60; i++) {
+    const h = M3.stickToHeading(1, 0, 0);            // hold right, camera fixed
+    const p = w.player;
+    w.update(1 / 60, { steer: p.steerToward(p.x + h.x * 8, p.z + h.z * 8) });
+  }
+  assert.ok(Math.abs(M3.angleDelta(start, w.player.yaw)) > 1, 'turned by ' +
+    M3.angleDelta(start, w.player.yaw).toFixed(2) + ' rad');
+});
+
 console.log('snake');
 
 test('a fresh snake has a straight tail behind the head', () => {
