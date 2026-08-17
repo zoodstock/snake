@@ -2,13 +2,11 @@
  * Headless tests for the pure simulation modules (no WebGL, no DOM).
  * Run with:  node tests/logic.test.js
  */
-'use strict';
-
-const assert = require('assert');
-const path = require('path');
-const M3 = require(path.join(__dirname, '..', 'src', 'math3d.js'));
-const { Snake } = require(path.join(__dirname, '..', 'src', 'snake.js'));
-const { World } = require(path.join(__dirname, '..', 'src', 'world.js'));
+import assert from 'node:assert';
+import * as M3 from '../src/sim/math.js';
+import * as MAT from '../src/render/mat4.js';
+import { Snake } from '../src/sim/snake.js';
+import { World } from '../src/sim/world.js';
 
 let passed = 0;
 const failures = [];
@@ -33,9 +31,9 @@ function run(target, seconds, input, step) {
 console.log('math3d');
 
 test('perspective + lookAt put a point ahead of the camera on screen', () => {
-  const proj = M3.perspective(M3.mat4(), Math.PI / 3, 1.5, 0.5, 200);
-  const view = M3.lookAt(M3.mat4(), [0, 6, -12], [0, 1, 0], [0, 1, 0]);
-  const vp = M3.multiply(M3.mat4(), proj, view);
+  const proj = MAT.perspective(MAT.mat4(), Math.PI / 3, 1.5, 0.5, 200);
+  const view = MAT.lookAt(MAT.mat4(), [0, 6, -12], [0, 1, 0], [0, 1, 0]);
+  const vp = MAT.multiply(MAT.mat4(), proj, view);
   const p = [0, 1, 0, 1];
   const clip = [0, 1, 2, 3].map((r) =>
     vp[r] * p[0] + vp[4 + r] * p[1] + vp[8 + r] * p[2] + vp[12 + r] * p[3]);
@@ -47,8 +45,8 @@ test('perspective + lookAt put a point ahead of the camera on screen', () => {
 });
 
 test('matrix multiply matches identity behaviour', () => {
-  const a = M3.perspective(M3.mat4(), 1, 1, 0.1, 10);
-  const out = M3.multiply(M3.mat4(), a, M3.identity(M3.mat4()));
+  const a = MAT.perspective(MAT.mat4(), 1, 1, 0.1, 10);
+  const out = MAT.multiply(MAT.mat4(), a, MAT.identity(MAT.mat4()));
   for (let i = 0; i < 16; i++) assert.ok(Math.abs(out[i] - a[i]) < 1e-6);
 });
 

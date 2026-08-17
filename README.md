@@ -5,30 +5,22 @@ Roblox but you are a snake.
 **Block Snake** — 플레이어가 뱀이 되어 블록으로 만들어진 3D 아레나를 돌아다니는 3인칭 게임입니다.
 카메라는 뱀 머리 뒤를 따라다니고, 몸통은 머리가 실제로 지나간 경로를 그대로 따라옵니다.
 
-의존성이 전혀 없습니다. 빌드 도구도, 엔진도, `npm install`도 필요 없습니다.
-렌더러는 순수 WebGL로 직접 작성했고, 효과음은 WebAudio로 합성합니다.
+의존성이 전혀 없습니다. 빌드 도구도, 번들러도, `npm install`도 필요 없습니다.
+브라우저가 ES 모듈을 그대로 로드하고, 렌더러는 순수 WebGL로 직접 작성했으며,
+효과음은 WebAudio로 합성합니다.
 
-## 실행 방법
+## 플레이
 
-`index.html`을 브라우저에서 열면 끝입니다 (파일을 더블클릭해도 동작합니다).
+**https://zoodstock.github.io/snake/** — `main`에 푸시되면 GitHub Actions가 자동 배포합니다.
 
-로컬 서버로 띄우고 싶다면:
+## 로컬에서 실행
+
+ES 모듈은 `file://`에서 로드되지 않으므로 (브라우저 CORS 정책) 정적 서버가 필요합니다:
 
 ```bash
-python3 -m http.server 8000
+python3 -m http.server 8000    # 또는: npm start
 # http://localhost:8000 접속
 ```
-
-### 단일 파일로 묶기
-
-공유하거나 아무 데나 올리기 좋은 자체 포함 HTML 한 개로 만들 수 있습니다:
-
-```bash
-node tools/bundle.js              # dist/blocksnake.html (약 81 KB, 단독 실행)
-node tools/bundle.js --fragment   # <head>를 직접 제공하는 호스트용 조각
-```
-
-스크립트 9개를 그대로 인라인하므로 `index.html`과 동작이 동일합니다.
 
 ## 조작
 
@@ -108,9 +100,12 @@ WebGL2가 있으면 그대로 쓰고, 없으면 WebGL1 + `ANGLE_instanced_arrays
 ## 테스트
 
 ```bash
-node tests/logic.test.js
+node tests/logic.test.mjs    # 또는: npm test
 ```
 
 WebGL이나 DOM 없이 순수 시뮬레이션(수학, 뱀, 월드)을 검증합니다 — 몸통이 경로를 따라오는지,
 충돌·점수·콤보·스태미나가 맞는지, 트레일 메모리가 제한되는지, 라이벌이 몇 분 동안
 사고 없이 돌아다니는지, 스틱 방향이 카메라 기준으로 올바르게 변환되는지 등 37개 테스트입니다.
+
+렌더러는 브라우저가 필요하므로 CI에서는 별도로 페이지를 띄워 모듈 그래프가 전부
+해석되는지 확인합니다 (import 경로 오타를 배포 전에 잡습니다).
