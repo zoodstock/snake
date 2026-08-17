@@ -27,20 +27,31 @@ export function rotateY(x, z, yaw) {
 }
 
 /**
- * Turn a stick reading into a world heading, relative to where the camera is
- * looking: pushing up means "away from the camera", left means "camera left".
- * `sy` is positive up. Returns null inside the dead zone.
+ * Turn a stick push into a world heading for the snake to hold on to.
+ *
+ * Reading the stick against the live camera every frame cannot ever settle: the
+ * chase camera swings in behind the snake as it turns, so the target swings with
+ * it, and anything but a straight-up push circles forever. The camera yaw is
+ * therefore sampled when the push starts and held while the thumb sits still, so
+ * the snake reaches the direction you pointed at and stays on it. Moving the thumb
+ * more than `repoint` re-aims against the view actually on screen, which is what
+ * keeps steering continuous rather than one-shot.
+ *
+ * `prev` is what this returned last frame, or null when the stick was at rest.
+ * Returns null inside the dead zone, which also re-arms the next push.
  */
-export function stickToHeading(sx, sy, camYaw, deadZone) {
-  const dead = deadZone === undefined ? 0.24 : deadZone;
+export function stickHeading(prev, sx, sy, camYaw, opts) {
+  const cfg = opts || {};
+  const dead = cfg.deadZone === undefined ? 0.24 : cfg.deadZone;
+  const repoint = cfg.repoint === undefined ? 0.21 : cfg.repoint;   // ~12 degrees
   const magnitude = Math.hypot(sx, sy);
   if (magnitude < dead) return null;
   // Rescale so the usable range starts at the dead zone edge, not at zero.
   const strength = clamp((magnitude - dead) / (1 - dead), 0, 1);
-  const fx = Math.sin(camYaw), fz = Math.cos(camYaw);
-  const rx = fz, rz = -fx;                       // camera right, on the ground plane
-  let x = fx * (sy / magnitude) + rx * (sx / magnitude);
-  let z = fz * (sy / magnitude) + rz * (sx / magnitude);
-  const len = Math.hypot(x, z) || 1;
-  return { x: x / len, z: z / len, strength };
+  const angle = Math.atan2(sx, sy);        // 0 = straight up the screen, + = right
+  if (prev && Math.abs(angleDelta(prev.angle, angle)) <= repoint) {
+    // Thumb held: keep the frozen angle too, so the heading does not creep.
+    return { refYaw: prev.refYaw, angle: prev.angle, yaw: prev.refYaw + prev.angle, strength };
+  }
+  return { refYaw: camYaw, angle, yaw: camYaw + angle, strength };
 }

@@ -64,7 +64,12 @@ Rules that are easy to break by accident:
   used to spawn on top of each other or nose-first into a block and die in a loop.
   Don't simplify it away; `npm test` covers it.
 - Steering has two shapes: keyboard/drag give a **turn rate**, sticks give a
-  **camera-relative direction** (`stickToHeading`). Keep both.
+  **direction to hold** (`stickHeading`). Keep both.
+- `stickHeading` samples the camera yaw when a push *starts* and keeps it while the
+  thumb sits still; `Game.stickAim` carries that between frames. Do not "simplify" it
+  to this frame's camera yaw: the chase camera swings in behind the snake as it turns,
+  so the target swings too and any sideways push circles forever instead of settling.
+  `npm test` drives the real `ChaseCamera` to cover exactly that.
 
 Tuning constants live in `CFG` in `src/sim/world.js` and `DEFAULTS` in `src/sim/snake.js`.
 
@@ -72,7 +77,7 @@ Tuning constants live in `CFG` in `src/sim/world.js` and `DEFAULTS` in `src/sim/
 
 `npm test` runs two suites, neither needing a browser or network:
 
-- `tests/logic.test.mjs` — 35 simulation tests, deterministic (`World` takes a seed).
+- `tests/logic.test.mjs` — 37 simulation tests, deterministic (`World` takes a seed).
 - `tests/renderer.smoke.mjs` — drives the real renderer over a real simulation with
   three.js swapped for `tests/three-stub.mjs` (resolved by a loader hook). It proves
   the renderer runs and produces finite transforms inside its instance budgets. It
