@@ -6,7 +6,7 @@
  * world, it never changes it.
  */
 
-import { PALETTE } from './render/palette.js';
+import { PALETTE, rgb255 } from './render/palette.js';
 
 const DEATH_TEXT = {
   wall: 'You slithered straight into the wall.',
@@ -173,7 +173,7 @@ export class Hud {
     for (const r of world.rivals) {
       if (!r.snake.alive) continue;
       const tint = PALETTE.rivals[r.tint % PALETTE.rivals.length][0];
-      trace(r.snake, 'rgba(' + tint.map((c) => Math.round(c * 255)).join(',') + ',0.9)', 2);
+      trace(r.snake, 'rgba(' + rgb255(tint) + ',0.9)', 2);
     }
     if (world.player.body.length) trace(world.player, 'rgba(120, 235, 100, 0.95)', 2.4);
 

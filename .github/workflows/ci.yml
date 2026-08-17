@@ -16,31 +16,13 @@ jobs:
       - name: Simulation tests
         run: node tests/logic.test.mjs
 
-      # The renderer needs a browser, so smoke-test the real page: serve it,
-      # load it, and fail if the module graph or WebGL setup throws.
-      - name: Page smoke test
+      - name: Renderer smoke test
+        run: node --import ./tests/register-three-stub.mjs tests/renderer.smoke.mjs
+
+      # The renderer needs a browser, so guard the next best thing: serve the
+      # page and prove every import in the module graph resolves.
+      - name: Module graph check
         run: |
           python3 -m http.server 8123 &
           sleep 2
-          node --input-type=module -e "
-            const res = await fetch('http://127.0.0.1:8123/index.html');
-            if (!res.ok) throw new Error('index.html: ' + res.status);
-            const html = await res.text();
-            const entry = html.match(/<script type=\"module\" src=\"([^\"]+)\"/);
-            if (!entry) throw new Error('no module entry point in index.html');
-            const seen = new Set();
-            const walk = async (path) => {
-              if (seen.has(path)) return;
-              seen.add(path);
-              const r = await fetch('http://127.0.0.1:8123/' + path);
-              if (!r.ok) throw new Error(path + ': ' + r.status);
-              const src = await r.text();
-              const dir = path.slice(0, path.lastIndexOf('/') + 1);
-              for (const m of src.matchAll(/from\s+'([^']+)'/g)) {
-                const rel = new URL(m[1], 'http://x/' + dir).pathname.slice(1);
-                await walk(rel);
-              }
-            };
-            await walk(entry[1]);
-            console.log('module graph ok:', seen.size, 'files');
-          "
+          node tests/modules.check.mjs http://127.0.0.1:8123

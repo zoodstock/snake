@@ -1,12 +1,15 @@
 {
   "name": "block-snake",
   "version": "1.0.0",
-  "description": "Third-person 3D snake game. No dependencies, no build step.",
+  "description": "Third-person 3D snake game built with three.js. No build step.",
   "type": "module",
   "private": true,
   "license": "MIT",
   "scripts": {
-    "test": "node tests/logic.test.mjs",
-    "start": "python3 -m http.server 8000"
+    "test": "node tests/logic.test.mjs && node --import ./tests/register-three-stub.mjs tests/renderer.smoke.mjs",
+    "test:sim": "node tests/logic.test.mjs",
+    "test:renderer": "node --import ./tests/register-three-stub.mjs tests/renderer.smoke.mjs",
+    "start": "python3 -m http.server 8000",
+    "test:modules": "node tests/modules.check.mjs http://127.0.0.1:8000"
   }
 }

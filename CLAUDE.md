@@ -5,13 +5,15 @@ head and the body follows the path the head actually travelled.
 
 Live: **https://zoodstock.github.io/snake/** (deployed from `main` by GitHub Actions)
 
-No dependencies, no build step, no bundler. The browser loads ES modules directly.
+Rendering is three.js, loaded from a CDN via an importmap. No build step, no
+bundler — the browser loads the ES modules directly.
 
 ## Commands
 
 ```bash
-npm test        # node tests/logic.test.mjs — simulation tests, no browser needed
-npm start       # python3 -m http.server 8000
+npm test            # simulation tests + renderer smoke test (no browser, no network)
+npm start           # python3 -m http.server 8000
+npm run test:modules   # with a server running: every import resolves
 ```
 
 **ES modules do not load over `file://`.** Opening `index.html` by double-click gives
@@ -36,11 +38,8 @@ src/sim/math.js         scalars, angles, stick → heading   (no DOM, no GL)
 src/sim/snake.js        head movement, trail, body sampling
 src/sim/world.js        arena, food, obstacles, rival AI, collisions, scoring
 
-src/render/renderer.js  scene assembly: sky → ground → shadows → solids → glows
-src/render/gl.js        context, programs, meshes, instanced batches
-src/render/shaders.js   GLSL ES 1.00 sources
-src/render/palette.js   colours
-src/render/mat4.js      4x4 matrices
+src/render/renderer.js  three.js scene: lights, ground, instanced box batches
+src/render/palette.js   colours, as hex numbers
 
 src/input/input.js      keyboard / mouse drag / touch / gamepad
 src/input/joystick.js   on-screen thumbstick
@@ -52,11 +51,13 @@ Rules that are easy to break by accident:
 - Nothing under `src/sim/` may import from `render/`, `input/` or the DOM.
 - The body is sampled from the head's trail **by arc length**, not stored per-frame.
   Trail points are pruned to the body length, so memory stays flat.
-- Everything solid is drawn from one instanced cube (4 draw calls/frame). New scene
-  content should join a batch, not add a draw call.
-- Ground shader tiling needs `highp` (guarded by `GL_FRAGMENT_PRECISION_HIGH`).
-  With `mediump`, `fract()` quantises at the far end of the 150-unit floor and the
-  grid breaks into wide bands.
+- Nearly everything is an instanced box in one of four batches (`scenery`, `bodies`,
+  `glow`, `beacons`). New scene content should join a batch, not add a mesh.
+  `scenery` is static and only rebuilt when `world.obstacles` is replaced.
+- Colours in `palette.js` are hex numbers so `new THREE.Color(hex)` does the
+  sRGB→linear conversion. Don't pass 0..1 triples to three.js.
+- `InstancedMesh.frustumCulled` must stay false: instances move every frame, so the
+  mesh's bounding sphere is meaningless and three would cull the whole batch.
 - Rival spawn logic (`_freeSpot` clearance, `_openHeading`) exists because rivals
   used to spawn on top of each other or nose-first into a block and die in a loop.
   Don't simplify it away; `npm test` covers it.
@@ -67,9 +68,16 @@ Tuning constants live in `CFG` in `src/sim/world.js` and `DEFAULTS` in `src/sim/
 
 ## Verifying changes
 
-Logic: `npm test` (37 tests, deterministic — `World` takes a seed).
+`npm test` runs two suites, neither needing a browser or network:
 
-**Rendering cannot be verified by tests.** Check it in a real browser:
+- `tests/logic.test.mjs` — 35 simulation tests, deterministic (`World` takes a seed).
+- `tests/renderer.smoke.mjs` — drives the real renderer over a real simulation with
+  three.js swapped for `tests/three-stub.mjs` (resolved by a loader hook). It proves
+  the renderer runs and produces finite transforms inside its instance budgets. It
+  proves nothing about how the scene looks, and it is not a test of three.js: if the
+  renderer starts using a three.js API the stub lacks, add it to the stub.
+
+**How the scene actually looks can only be verified in a browser:**
 
 ```bash
 python3 -m http.server 8123 &
@@ -104,8 +112,9 @@ effect in a *new* session.
 - Allowed: `github.com`, `api.github.com`.
 - Blocked: `registry.npmjs.org`, `pypi.org`, `cdn.jsdelivr.net`, `esm.sh`
   (403 `Host not in allowlist` at the gateway). So `npm install` cannot work.
-- `unpkg.com` was added to the allowlist on 2026-08-17 at the user's request. It was
-  still 403 in the session that requested it. **Check it at session start:**
+- `unpkg.com` hosts three.js for this project and was added to the allowlist on
+  2026-08-17. It was still 403 in the session that requested it, because the policy
+  is fixed at boot — a *new session* is needed. **Check it at session start:**
   ```bash
   curl -sS -o /dev/null -w '%{http_code}\n' https://unpkg.com/three@0.160.0/package.json
   ```
@@ -128,23 +137,31 @@ effect in a *new* session.
   `main` rather than stacking onto merged history.
 - Don't put model identifiers in commits, PR text, or code comments.
 
-## Pending work
+## three.js
 
-**Port `src/render/` to three.js.** The user prefers three.js and it is the reason
-`unpkg.com` was allowlisted. Their own `zoodstock/minecraft` repo (code lives on the
-`claude/minecraft-game-prototype-KmKxV` branch, not `main`) does it like this:
+`index.html` declares an importmap pointing `three` at
+`https://unpkg.com/three@0.160.0/build/three.module.js`, the same pattern (and pin) as
+the user's `zoodstock/minecraft` project, which has been serving it from GitHub Pages
+successfully. The *player's browser* fetches three.js, so the site does not depend on
+the sandbox being able to reach unpkg.
 
-```html
-<script type="importmap">
-{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
-</script>
-```
+Vendoring the file into the repo instead would remove the runtime CDN dependency and
+is worth doing once a session can actually download it.
 
-with `import * as THREE from 'three'` and no vendored copy — the *player's browser*
-fetches three.js, which is why that project worked despite the blocked sandbox.
+### Not yet verified in a browser
 
-Prefer vendoring three.js into the repo once `unpkg.com` is reachable, so the site has
-no runtime CDN dependency, and verify the port headlessly (see above) before pushing.
-three.js would also replace the fake shadow blobs with real shadow maps. Only
-`src/render/` and the small camera glue should need to change — that is what the
-layering is for.
+The three.js port was written in a session that could not reach unpkg, so the scene has
+never been rendered. The smoke test and module check pass, but these are unconfirmed:
+
+- Light intensities (`DirectionalLight` 2.1, `HemisphereLight` 1.15). three.js r155+
+  uses physically-correct lighting, so these may need scaling.
+- Real shadow maps replaced the old fake shadow quads: check `shadow.bias` for acne
+  or peter-panning, and that the 46-unit shadow frustum following the player is big
+  enough.
+- `scene.background` is a plain `CanvasTexture` gradient, drawn as a full-screen quad;
+  confirm it is not stretched oddly at wide aspect ratios.
+- Ground checker scale (`groundTexture.repeat`) and whether the fog range
+  (55 → 200) still hides the arena edge.
+
+Run the browser check in **CLAUDE.md → Verifying changes**, look at the screenshot,
+then fix and re-verify.

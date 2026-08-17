@@ -4,7 +4,6 @@
  */
 import assert from 'node:assert';
 import * as M3 from '../src/sim/math.js';
-import * as MAT from '../src/render/mat4.js';
 import { Snake } from '../src/sim/snake.js';
 import { World } from '../src/sim/world.js';
 
@@ -29,26 +28,6 @@ function run(target, seconds, input, step) {
 }
 
 console.log('math3d');
-
-test('perspective + lookAt put a point ahead of the camera on screen', () => {
-  const proj = MAT.perspective(MAT.mat4(), Math.PI / 3, 1.5, 0.5, 200);
-  const view = MAT.lookAt(MAT.mat4(), [0, 6, -12], [0, 1, 0], [0, 1, 0]);
-  const vp = MAT.multiply(MAT.mat4(), proj, view);
-  const p = [0, 1, 0, 1];
-  const clip = [0, 1, 2, 3].map((r) =>
-    vp[r] * p[0] + vp[4 + r] * p[1] + vp[8 + r] * p[2] + vp[12 + r] * p[3]);
-  assert.ok(clip[3] > 0, 'point should be in front of the camera');
-  const ndc = [clip[0] / clip[3], clip[1] / clip[3], clip[2] / clip[3]];
-  assert.ok(Math.abs(ndc[0]) < 0.05, 'centred horizontally, got ' + ndc[0]);
-  assert.ok(Math.abs(ndc[1]) < 0.6, 'roughly centred vertically, got ' + ndc[1]);
-  assert.ok(ndc[2] > -1 && ndc[2] < 1, 'inside the depth range');
-});
-
-test('matrix multiply matches identity behaviour', () => {
-  const a = MAT.perspective(MAT.mat4(), 1, 1, 0.1, 10);
-  const out = MAT.multiply(MAT.mat4(), a, MAT.identity(MAT.mat4()));
-  for (let i = 0; i < 16; i++) assert.ok(Math.abs(out[i] - a[i]) < 1e-6);
-});
 
 test('angleDelta takes the short way round', () => {
   assert.ok(Math.abs(M3.angleDelta(0.1, -0.1) - -0.2) < 1e-9);

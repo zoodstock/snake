@@ -28,6 +28,9 @@ jobs:
       - name: Simulation tests
         run: node tests/logic.test.mjs
 
+      - name: Renderer smoke test
+        run: node --import ./tests/register-three-stub.mjs tests/renderer.smoke.mjs
+
   deploy:
     needs: test
     runs-on: ubuntu-latest
