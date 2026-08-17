@@ -19,6 +19,17 @@ python3 -m http.server 8000
 # http://localhost:8000 접속
 ```
 
+### 단일 파일로 묶기
+
+공유하거나 아무 데나 올리기 좋은 자체 포함 HTML 한 개로 만들 수 있습니다:
+
+```bash
+node tools/bundle.js              # dist/blocksnake.html (약 81 KB, 단독 실행)
+node tools/bundle.js --fragment   # <head>를 직접 제공하는 호스트용 조각
+```
+
+스크립트 9개를 그대로 인라인하므로 `index.html`과 동작이 동일합니다.
+
 ## 조작
 
 | 입력 | 동작 |
@@ -56,6 +67,7 @@ src/camera.js       3인칭 추격 카메라
 src/input.js        키보드 / 마우스 / 터치 입력
 src/audio.js        WebAudio 효과음 합성
 src/main.js         프레임 루프, HUD, 미니맵, 게임 상태
+tools/bundle.js     단일 HTML 파일로 묶는 스크립트
 tests/logic.test.js 시뮬레이션 로직 테스트
 ```
 

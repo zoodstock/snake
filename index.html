@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Block Snake — 3인칭 뱀 게임</title>
+<title>Block Snake</title>
 <style>
   :root {
     --ink: #08130d;
@@ -29,6 +29,7 @@
   #scene {
     position: fixed;
     inset: 0;
+    outline: none;
     width: 100%;
     height: 100%;
     display: block;
@@ -190,6 +191,7 @@
     border-radius: 10px;
   }
   .btn:hover { background: rgba(124, 236, 98, 0.28); }
+  .btn:focus-visible, .chip:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 
   .corner-actions { display: flex; gap: 8px; pointer-events: auto; }
   .chip {
@@ -229,7 +231,7 @@
 </style>
 </head>
 <body>
-<canvas id="scene"></canvas>
+<canvas id="scene" tabindex="0" aria-label="Block Snake game view"></canvas>
 
 <div class="hud">
   <div class="row">

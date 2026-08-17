@@ -66,6 +66,9 @@
       });
 
       this.canvas.addEventListener('pointerdown', () => {
+        // Claim keyboard focus — the page may be running inside an iframe.
+        this.canvas.focus();
+        try { window.focus(); } catch (err) { /* cross-origin parent */ }
         this.sfx.unlock();
         if (this.state === 'menu') this.start();
         else if (this.state === 'dead' && this.deadFor > 0.8) this.start();
@@ -134,7 +137,7 @@
       if (kind === 'menu') {
         o.title.textContent = 'BLOCK SNAKE';
         o.body.innerHTML = 'You <strong>are</strong> the snake. Grow, dodge blocks, outlive the rivals.';
-        o.hint.innerHTML = '<kbd>A</kbd><kbd>D</kbd> or <kbd>←</kbd><kbd>→</kbd> steer &nbsp;·&nbsp; <kbd>Shift</kbd> boost &nbsp;·&nbsp; <kbd>Enter</kbd> to begin';
+        o.hint.innerHTML = 'Click <strong>Slither</strong> to start, then <kbd>A</kbd><kbd>D</kbd> or <kbd>←</kbd><kbd>→</kbd> to steer &nbsp;·&nbsp; <kbd>Shift</kbd> to boost';
       } else if (kind === 'paused') {
         o.title.textContent = 'PAUSED';
         o.body.textContent = 'Take a breath.';
