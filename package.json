@@ -1,0 +1,12 @@
+{
+  "name": "block-snake",
+  "version": "1.0.0",
+  "description": "Third-person 3D snake game. No dependencies, no build step.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node tests/logic.test.mjs",
+    "start": "python3 -m http.server 8000"
+  }
+}
