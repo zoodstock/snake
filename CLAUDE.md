@@ -216,3 +216,32 @@ Two real defects turned up and are fixed:
 Not a defect, checked and dismissed: the band of page background along the bottom of a
 1280×800 screenshot is capture padding, not a canvas sizing bug — see **Verifying
 changes**.
+
+### Image quality, measured 2026-08-18
+
+Judged from 1:1 crops of a deterministic frame (fixed seed, fixed pose, fixed frame
+count), differenced band by band. What actually moved the image, and what did not:
+
+- **The shadow map was the one real lever.** At 2048 over the 92-unit frustum — 22
+  texels per world unit — shadow edges were plainly stepped at 1:1. It is now 4096
+  (44 texels/unit), stepping down to 2048 when the GPU's whole texture limit is 4096,
+  since those are the devices that can least afford it. Diffing before/after put the
+  change exactly where shadows fall, peaking at 49/255.
+- **The minimap was drawn at CSS size and stretched by the browser.** It is a canvas,
+  so it needs the device pixel ratio applied to its backing store, which nothing did:
+  148 px regardless of screen. `Hud._fitMinimap` now sizes it to `clientWidth × dpr`
+  and scales the 2D context, so drawing code stays in CSS pixels. 292 px on a 2× screen
+  instead of 148. **Any canvas added to the HUD needs the same treatment.**
+- **Sharper texture filtering barely mattered.** Anisotropy 4 → the GPU's max (16) and
+  the checker tile 256² → 512² together moved the frame by a mean of 0.2/255, peaking
+  at 16, because a 2×2 checker with thin seams has almost no high-frequency detail to
+  recover. Both are kept — they are free and correct — but do not expect a visible win
+  from filtering here, and don't spend effort re-doing it.
+- Already fine, don't bother: MSAA is genuinely active (the context reports 4 samples),
+  the sky gradient is only ever magnified (its mipmaps are off now), and `MAX_DPR = 2`
+  in `game.js` is a deliberate cap — raising it to 3 costs 2.25× the fill.
+
+The most visually objectionable thing left is the food **beacons**: additive boxes at
+0.22 opacity, so they read as flat washed-out panels with hard rectangular edges rather
+than glow. Softening them needs a falloff texture or a shader, and it trades against
+their job of being visible across the arena — ask before changing it.

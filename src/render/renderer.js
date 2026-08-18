@@ -74,7 +74,7 @@ class BoxBatch {
 
 /** A 2x2 checker tile with faint seams, drawn once into a canvas. */
 function groundTexture() {
-  const px = 128;                       // pixels per world tile
+  const px = 256;                       // pixels per world tile
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = px * 2;
   const ctx = canvas.getContext('2d');
@@ -96,7 +96,6 @@ function groundTexture() {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.anisotropy = 4;
   return texture;
 }
 
@@ -115,13 +114,16 @@ function skyTexture() {
   ctx.fillRect(0, 0, 4, 256);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  // Drawn full-screen, so it is always magnified: mips would only cost memory.
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
   return texture;
 }
 
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.three = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.three = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.three.shadowMap.enabled = true;
     this.three.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -136,7 +138,13 @@ export class Renderer {
     this.scene.add(new THREE.HemisphereLight(PALETTE.skyHorizon, PALETTE.grassA, 1.15));
     this.sun = new THREE.DirectionalLight(0xfff3e0, 2.1);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    // 2048 over the 92-unit frustum below is 22 texels per world unit, and the
+    // shadow edges were visibly stepped at 1:1. 4096 doubles that; the scene is
+    // only ~10k triangles in 6 draw calls, so the depth-only pass is cheap next to
+    // how much of the frame shadows cover. A GPU whose whole texture limit is 4096
+    // is not one to spend all of it on a shadow map, so those stay at 2048.
+    const shadowPx = this.three.capabilities.maxTextureSize >= 8192 ? 4096 : 2048;
+    this.sun.shadow.mapSize.set(shadowPx, shadowPx);
     this.sun.shadow.bias = -0.0006;
     const shadowCam = this.sun.shadow.camera;
     shadowCam.left = -46; shadowCam.right = 46;
@@ -148,6 +156,7 @@ export class Renderer {
 
     // Ground. Sized in render() once the arena is known.
     this.groundTexture = groundTexture();
+    this.groundTexture.anisotropy = this.three.capabilities.getMaxAnisotropy();
     this.ground = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       new THREE.MeshLambertMaterial({ map: this.groundTexture }),

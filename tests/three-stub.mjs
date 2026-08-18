@@ -14,6 +14,7 @@ export const SRGBColorSpace = 'srgb';
 export const RepeatWrapping = 'repeat';
 export const AdditiveBlending = 'additive';
 export const DynamicDrawUsage = 'dynamic';
+export const LinearFilter = 'linear';
 
 export const stats = { renders: 0, matrices: 0, colors: 0, maxIndex: {} };
 
@@ -126,6 +127,9 @@ export class WebGLRenderer {
   constructor(opts) {
     if (!opts || !opts.canvas) throw new Error('WebGLRenderer needs a canvas');
     this.shadowMap = {};
+    // The renderer asks the GPU how much anisotropic filtering it can have.
+    // 16 is what a real desktop GL context reports.
+    this.capabilities = { getMaxAnisotropy: () => 16, maxTextureSize: 16384 };
   }
   setPixelRatio(r) { if (!Number.isFinite(r) || r <= 0) throw new Error('bad pixel ratio'); this.dpr = r; }
   setSize(w, h) {
