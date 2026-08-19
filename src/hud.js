@@ -7,6 +7,7 @@
  */
 
 import { PALETTE, rgb255 } from './render/palette.js';
+import { versionLabel } from './version.js';
 
 const DEATH_TEXT = {
   wall: 'You slithered straight into the wall.',
@@ -39,6 +40,10 @@ export class Hud {
     this.stickBadge = $('stickBadge');
     this.minimap = $('minimap');
     this.minimapCtx = this.minimap ? this.minimap.getContext('2d') : null;
+
+    // Stamped once: it never changes while the page is open.
+    const version = $('version');
+    if (version) version.textContent = versionLabel();
     this.flashTimer = 0;
     this._cache = {};
   }
@@ -157,7 +162,11 @@ export class Hud {
     if (!size) return;
     const arena = world.cfg.arena;
     const scale = size / (arena * 2 + 6);
-    const toX = (x) => size / 2 + x * scale;
+    // Looking straight down at the XZ plane with +Z up the map puts +X to the
+    // LEFT, the same way round as the 3D view — where screen right is world -X.
+    // Drawn with +X to the right the map was a mirror image of what the player
+    // could see, which is worse than useless when you are dodging.
+    const toX = (x) => size / 2 - x * scale;
     const toY = (z) => size / 2 - z * scale;
 
     ctx.clearRect(0, 0, size, size);

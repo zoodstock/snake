@@ -48,10 +48,16 @@ export function stickHeading(prev, sx, sy, camYaw, opts) {
   if (magnitude < dead) return null;
   // Rescale so the usable range starts at the dead zone edge, not at zero.
   const strength = clamp((magnitude - dead) / (1 - dead), 0, 1);
+  // Screen right is world -X when the camera looks along +Z, not +X: a three.js
+  // camera looks down its local -Z, so the handedness flips the sideways axis.
+  // Measured by projecting world axes with the real camera — see CLAUDE.md. Hence
+  // the heading is camYaw MINUS the stick angle; getting this backwards is what
+  // made the snake veer the wrong way.
   const angle = Math.atan2(sx, sy);        // 0 = straight up the screen, + = right
+  const yawFor = (ref, a) => ref - a;
   if (prev && Math.abs(angleDelta(prev.angle, angle)) <= repoint) {
     // Thumb held: keep the frozen angle too, so the heading does not creep.
-    return { refYaw: prev.refYaw, angle: prev.angle, yaw: prev.refYaw + prev.angle, strength };
+    return { refYaw: prev.refYaw, angle: prev.angle, yaw: yawFor(prev.refYaw, prev.angle), strength };
   }
-  return { refYaw: camYaw, angle, yaw: camYaw + angle, strength };
+  return { refYaw: camYaw, angle, yaw: yawFor(camYaw, angle), strength };
 }

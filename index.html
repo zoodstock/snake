@@ -176,6 +176,16 @@
   }
   #overlayHint { font-size: 13px; opacity: 0.8; }
 
+  /* Build marker. Deliberately readable rather than hidden: it is how a deploy
+     gets confirmed at a glance. */
+  #version {
+    font-size: 11px;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    opacity: 0.55;
+    font-variant-numeric: tabular-nums;
+  }
+
   .btn {
     pointer-events: auto;
     cursor: pointer;
@@ -364,6 +374,7 @@
   <p id="overlayBody"></p>
   <button class="btn" data-action="start">Slither</button>
   <div id="overlayHint"></div>
+  <div id="version"></div>
 </div>
 
 <div id="fatal"></div>

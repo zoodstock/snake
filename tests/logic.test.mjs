@@ -50,15 +50,24 @@ test('stickHeading ignores the dead zone', () => {
   assert.ok(M3.stickHeading(null, 0, 1, 0), 'a full push registers');
 });
 
-test('stickHeading reads relative to the camera', () => {
-  // Camera looking along +Z: push up = hold +Z, push right = hold +X.
-  assert.ok(Math.abs(M3.stickHeading(null, 0, 1, 0).yaw) < 1e-6);
-  assert.ok(Math.abs(M3.stickHeading(null, 1, 0, 0).yaw - Math.PI / 2) < 1e-6);
+// The heading that travels RIGHT across the screen, for a camera at `camYaw`.
+// Screen right is world -X when the camera looks along +Z, because a three.js
+// camera looks down its local -Z and that flips the sideways axis. Measured by
+// projecting world axes through the real camera, not assumed — assuming it the
+// other way round is exactly what sent the snake the wrong way.
+const screenRight = (camYaw) => camYaw - Math.PI / 2;
+const screenLeft = (camYaw) => camYaw + Math.PI / 2;
 
-  // Camera turned a quarter turn: up now means +X, and right means -Z.
+test('stickHeading reads relative to the camera', () => {
+  // Camera looking along +Z: push up holds +Z, push right goes right on screen.
+  assert.ok(Math.abs(M3.stickHeading(null, 0, 1, 0).yaw) < 1e-6);
+  assert.ok(Math.abs(M3.angleDelta(screenRight(0), M3.stickHeading(null, 1, 0, 0).yaw)) < 1e-6);
+  assert.ok(Math.abs(M3.angleDelta(screenLeft(0), M3.stickHeading(null, -1, 0, 0).yaw)) < 1e-6);
+
+  // Whichever way the camera faces, right on the stick is right on the screen.
   const yaw = Math.PI / 2;
-  assert.ok(Math.abs(M3.stickHeading(null, 0, 1, yaw).yaw - yaw) < 1e-6);
-  assert.ok(Math.abs(M3.stickHeading(null, 1, 0, yaw).yaw - Math.PI) < 1e-6);
+  assert.ok(Math.abs(M3.angleDelta(yaw, M3.stickHeading(null, 0, 1, yaw).yaw)) < 1e-6);
+  assert.ok(Math.abs(M3.angleDelta(screenRight(yaw), M3.stickHeading(null, 1, 0, yaw).yaw)) < 1e-6);
 });
 
 test('stickHeading scales strength with how far the stick is pushed', () => {
@@ -98,13 +107,17 @@ test('a snake steers toward where the stick points, the short way round', () => 
     const h = M3.stickHeading(null, sx, sy, 0);
     return s.steerToward(s.x + Math.sin(h.yaw) * 8, s.z + Math.cos(h.yaw) * 8);
   };
-  assert.ok(aim(1, 0.2) > 0, 'stick right turns right');
-  assert.ok(aim(-1, 0.2) < 0, 'stick left turns left');
+  // Turning toward screen right means turning toward camYaw - 90, so the steer
+  // this returns is negative. What matters is that the two are opposite and that
+  // straight up does nothing.
+  assert.ok(aim(1, 0.2) < 0, 'stick right steers toward screen right');
+  assert.ok(aim(-1, 0.2) > 0, 'stick left steers toward screen left');
   assert.ok(Math.abs(aim(0, 1)) < 1e-6, 'stick forward holds the line');
+  assert.ok(aim(1, 0.2) === -aim(-1, 0.2), 'left and right are mirror images');
 
   // Facing the other way, screen-left must still mean turn toward screen-left.
   s.yaw = Math.PI;
-  assert.ok(aim(-1, 0) > 0, 'sign follows the camera, not the snake');
+  assert.ok(aim(-1, 0) < 0, 'sign follows the camera, not the snake');
 });
 
 test('a stick held sideways settles on a heading instead of circling', () => {
@@ -130,8 +143,9 @@ test('a stick held sideways settles on a heading instead of circling', () => {
 
   for (let i = 0; i < 120; i++) step();
   const settled = p.yaw;
-  assert.ok(Math.abs(M3.angleDelta(start, settled) - Math.PI / 2) < 0.05,
-    'should have turned a quarter turn, turned ' + M3.angleDelta(start, settled).toFixed(3));
+  assert.ok(Math.abs(M3.angleDelta(screenRight(start), settled)) < 0.05,
+    'should have settled on the screen-right heading, ended ' + settled.toFixed(3) +
+    ' wanted ' + screenRight(start).toFixed(3));
 
   for (let i = 0; i < 120; i++) step();
   assert.strictEqual(w.state, 'playing', 'the probe should not have died');
