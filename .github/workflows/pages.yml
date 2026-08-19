@@ -39,6 +39,18 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
+      # The site has no build step, so this is the one thing rewritten on the way
+      # out: the version module's BUILD line, so the deployed page shows which
+      # commit it came from. Fails the deploy if the line is not found, rather than
+      # silently publishing a page that still claims to be 'dev'.
+      - name: Stamp the build into src/version.js
+        run: |
+          stamp="${GITHUB_SHA:0:7} $(date -u +%Y-%m-%d)"
+          sed -i "s|^export const BUILD = 'dev';$|export const BUILD = '${stamp}';|" src/version.js
+          grep -qF "export const BUILD = '${stamp}';" src/version.js
+          echo "stamped: ${stamp}"
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
         with:

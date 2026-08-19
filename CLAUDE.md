@@ -70,6 +70,12 @@ Rules that are easy to break by accident:
   to this frame's camera yaw: the chase camera swings in behind the snake as it turns,
   so the target swings too and any sideways push circles forever instead of settling.
   `npm test` drives the real `ChaseCamera` to cover exactly that.
+- **Screen right is world −X**, not +X, when the camera looks along +Z: a three.js
+  camera looks down its local −Z, and that flips the sideways axis. So the stick
+  heading is `camYaw − stickAngle`, and the minimap's `toX` subtracts. This was got
+  backwards twice — once in the original port and once "verified" by deriving it on
+  paper — and it sends the snake the wrong way. **Never reason it out; measure it**
+  (see **Verifying changes**).
 
 Tuning constants live in `CFG` in `src/sim/world.js` and `DEFAULTS` in `src/sim/snake.js`.
 
@@ -120,7 +126,14 @@ Then `Read` the PNG to actually look at it. Notes learned the hard way:
   clips the right edge, which is why the minimap looks cut off in portrait shots.
 - No PIL in the sandbox, but node decodes a screenshot with `zlib.inflateSync` in about
   40 lines (PNG, 8-bit, un-interlaced) when you want pixel statistics — clipping
-  percentages, mean brightness — instead of an eyeball.
+  percentages, mean brightness — instead of an eyeball. `deflateSync` re-encodes, so a
+  region can be cropped and looked at 1:1 instead of downscaled.
+- **To settle which way is left or right, project, don't derive.** With the game
+  running, `new THREE.Vector3(x, 1, z).project(game.renderer.camera)` gives NDC: x > 0
+  is the right of the screen. With the snake at the origin facing +Z, world (20, 0)
+  comes back at ndcX ≈ −1.35, i.e. on the **left**. To check where the snake actually
+  travels, stub `game.camera.update` to a no-op first so the chase camera stays put —
+  otherwise it follows the snake and every heading ends up centred.
 
 ## Environment (Claude Code on the web, environment "기본값")
 
@@ -152,9 +165,17 @@ effect in a *new* session.
 
 ## Deployment
 
-- `.github/workflows/pages.yml` — on push to `main`: run tests, then upload the repo
-  as a static site. Pages source is GitHub Actions (turned on by `configure-pages`
-  with `enablement: true`).
+- `.github/workflows/pages.yml` — on push to `main`: run tests, stamp the build, then
+  upload the repo as a static site. Pages source is GitHub Actions (turned on by
+  `configure-pages` with `enablement: true`).
+- **The deployed page shows its version**, bottom of the menu overlay: `VERSION` from
+  `src/version.js` plus a `BUILD` string the workflow rewrites with the short commit
+  SHA and date. From a checkout `BUILD` stays `dev`, so a local page is obvious. The
+  stamp step greps for its own result and fails the deploy if the line moved, so it
+  cannot silently publish `dev` — keep `export const BUILD = 'dev';` on one line.
+  This is the only thing rewritten at deploy time; the browser still has no build step.
+  It exists so a deploy can be confirmed visually, which matters because
+  `zoodstock.github.io` is unreachable from the sandbox.
 - `.github/workflows/ci.yml` — on pull requests: tests, plus a walk of the module
   graph over HTTP so a bad `import` path fails CI instead of blanking the page.
 
