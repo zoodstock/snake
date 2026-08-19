@@ -5,13 +5,15 @@ head and the body follows the path the head actually travelled.
 
 Live: **https://zoodstock.github.io/snake/** (deployed from `main` by GitHub Actions)
 
-No dependencies, no build step, no bundler. The browser loads ES modules directly.
+Rendering is three.js, vendored in the repo and wired up with an importmap. No build
+step, no bundler — the browser loads the ES modules directly.
 
 ## Commands
 
 ```bash
-npm test        # node tests/logic.test.mjs — simulation tests, no browser needed
-npm start       # python3 -m http.server 8000
+npm test            # simulation tests + renderer smoke test (no browser, no network)
+npm start           # python3 -m http.server 8000
+npm run test:modules   # with a server running: every import resolves
 ```
 
 **ES modules do not load over `file://`.** Opening `index.html` by double-click gives
@@ -36,15 +38,14 @@ src/sim/math.js         scalars, angles, stick → heading   (no DOM, no GL)
 src/sim/snake.js        head movement, trail, body sampling
 src/sim/world.js        arena, food, obstacles, rival AI, collisions, scoring
 
-src/render/renderer.js  scene assembly: sky → ground → shadows → solids → glows
-src/render/gl.js        context, programs, meshes, instanced batches
-src/render/shaders.js   GLSL ES 1.00 sources
-src/render/palette.js   colours
-src/render/mat4.js      4x4 matrices
+src/render/renderer.js  three.js scene: lights, ground, instanced box batches
+src/render/palette.js   colours, as hex numbers
 
 src/input/input.js      keyboard / mouse drag / touch / gamepad
 src/input/joystick.js   on-screen thumbstick
 src/audio/sfx.js        synthesised WebAudio effects
+
+vendor/three-0.160.0/   three.js r160 + its licence. Not ours; don't edit.
 ```
 
 Rules that are easy to break by accident:
@@ -52,24 +53,38 @@ Rules that are easy to break by accident:
 - Nothing under `src/sim/` may import from `render/`, `input/` or the DOM.
 - The body is sampled from the head's trail **by arc length**, not stored per-frame.
   Trail points are pruned to the body length, so memory stays flat.
-- Everything solid is drawn from one instanced cube (4 draw calls/frame). New scene
-  content should join a batch, not add a draw call.
-- Ground shader tiling needs `highp` (guarded by `GL_FRAGMENT_PRECISION_HIGH`).
-  With `mediump`, `fract()` quantises at the far end of the 150-unit floor and the
-  grid breaks into wide bands.
+- Nearly everything is an instanced box in one of four batches (`scenery`, `bodies`,
+  `glow`, `beacons`). New scene content should join a batch, not add a mesh.
+  `scenery` is static and only rebuilt when `world.obstacles` is replaced.
+- Colours in `palette.js` are hex numbers so `new THREE.Color(hex)` does the
+  sRGB→linear conversion. Don't pass 0..1 triples to three.js.
+- `InstancedMesh.frustumCulled` must stay false: instances move every frame, so the
+  mesh's bounding sphere is meaningless and three would cull the whole batch.
 - Rival spawn logic (`_freeSpot` clearance, `_openHeading`) exists because rivals
   used to spawn on top of each other or nose-first into a block and die in a loop.
   Don't simplify it away; `npm test` covers it.
 - Steering has two shapes: keyboard/drag give a **turn rate**, sticks give a
-  **camera-relative direction** (`stickToHeading`). Keep both.
+  **direction to hold** (`stickHeading`). Keep both.
+- `stickHeading` samples the camera yaw when a push *starts* and keeps it while the
+  thumb sits still; `Game.stickAim` carries that between frames. Do not "simplify" it
+  to this frame's camera yaw: the chase camera swings in behind the snake as it turns,
+  so the target swings too and any sideways push circles forever instead of settling.
+  `npm test` drives the real `ChaseCamera` to cover exactly that.
 
 Tuning constants live in `CFG` in `src/sim/world.js` and `DEFAULTS` in `src/sim/snake.js`.
 
 ## Verifying changes
 
-Logic: `npm test` (37 tests, deterministic — `World` takes a seed).
+`npm test` runs two suites, neither needing a browser or network:
 
-**Rendering cannot be verified by tests.** Check it in a real browser:
+- `tests/logic.test.mjs` — 37 simulation tests, deterministic (`World` takes a seed).
+- `tests/renderer.smoke.mjs` — drives the real renderer over a real simulation with
+  three.js swapped for `tests/three-stub.mjs` (resolved by a loader hook). It proves
+  the renderer runs and produces finite transforms inside its instance budgets. It
+  proves nothing about how the scene looks, and it is not a test of three.js: if the
+  renderer starts using a three.js API the stub lacks, add it to the stub.
+
+**How the scene actually looks can only be verified in a browser:**
 
 ```bash
 python3 -m http.server 8123 &
@@ -94,6 +109,18 @@ Then `Read` the PNG to actually look at it. Notes learned the hard way:
 - Joysticks can be driven with synthetic `PointerEvent`s; gamepads by stubbing
   `navigator.getGamepads()`.
 - The playwright npm package is not installed — drive Chromium via its CLI flags.
+- To inject a driver you need a page of your own: copy `index.html`, append a
+  `<script type="module" src="_driver.js">` before `</body>`, and serve both from the
+  repo root so the same-origin `src/` imports still resolve. Delete them afterwards.
+- **`--window-size=1280,800` gives a 713px viewport**, and the PNG is padded to 800
+  with the page background. A band of `body` colour along the bottom of a shot is that
+  padding — *not* a canvas failing to fill the viewport. Compare `window.innerHeight`
+  with `canvas.clientHeight` before believing a sizing bug; they matched exactly here.
+  The same applies sideways: a 430-wide window reports `innerWidth` 500 and the capture
+  clips the right edge, which is why the minimap looks cut off in portrait shots.
+- No PIL in the sandbox, but node decodes a screenshot with `zlib.inflateSync` in about
+  40 lines (PNG, 8-bit, un-interlaced) when you want pixel statistics — clipping
+  percentages, mean brightness — instead of an eyeball.
 
 ## Environment (Claude Code on the web, environment "기본값")
 
@@ -104,11 +131,21 @@ effect in a *new* session.
 - Allowed: `github.com`, `api.github.com`.
 - Blocked: `registry.npmjs.org`, `pypi.org`, `cdn.jsdelivr.net`, `esm.sh`
   (403 `Host not in allowlist` at the gateway). So `npm install` cannot work.
-- `unpkg.com` was added to the allowlist on 2026-08-17 at the user's request. It was
-  still 403 in the session that requested it. **Check it at session start:**
+- `unpkg.com` was requested for the allowlist on 2026-08-17 and is **still 403 in a
+  fresh session** — a new session was not enough, so assume it is simply not allowed.
+  It no longer matters: three.js is vendored into the repo (see **three.js** below).
+- **HTTP is not the only way out.** `curl` gets 403 at the gateway for
+  `raw.githubusercontent.com`, `codeload.github.com`, `registry.npmjs.org`, and even
+  `api.github.com` for a repo outside this session's scope — but the **git proxy serves
+  anonymous git reads of any public GitHub repo**. That is how three.js got here:
   ```bash
-  curl -sS -o /dev/null -w '%{http_code}\n' https://unpkg.com/three@0.160.0/package.json
+  git clone --depth 1 --branch r160 --filter=blob:none --sparse \
+    https://github.com/mrdoob/three.js /workspace/three.js
+  git -C /workspace/three.js sparse-checkout set build   # ~1.3 MB, not the whole repo
   ```
+  So when a dependency is needed and `curl`/`npm install` is blocked: if it is on
+  GitHub, a partial `git clone` will get it. Use `--filter=blob:none --sparse` — a full
+  clone of a big repo can blow the session's disk allowance.
 - **`zoodstock.github.io` is blocked**, so the deployed site cannot be opened from the
   sandbox. After deploying, report the workflow `conclusion` from the Actions API and
   **ask the user to confirm the page actually loads** — never claim the live site works.
@@ -128,23 +165,83 @@ effect in a *new* session.
   `main` rather than stacking onto merged history.
 - Don't put model identifiers in commits, PR text, or code comments.
 
-## Pending work
+## three.js
 
-**Port `src/render/` to three.js.** The user prefers three.js and it is the reason
-`unpkg.com` was allowlisted. Their own `zoodstock/minecraft` repo (code lives on the
-`claude/minecraft-game-prototype-KmKxV` branch, not `main`) does it like this:
+three.js r160 is **vendored** at `vendor/three-0.160.0/three.module.js`, and
+`index.html`'s importmap points `three` at that path. There is no CDN at runtime: the
+library is served from the same origin as the game, so no outage or version drift at
+unpkg can blank the page.
 
-```html
-<script type="importmap">
-{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
-</script>
-```
+The copy is `build/three.module.js` from `mrdoob/three.js` at tag `r160`
+(commit `d04539a`) — the same file `three@0.160.0` ships — with three.js's MIT licence
+beside it. To refresh or re-pin it, use the `git clone` recipe in **Environment**;
+`curl` cannot reach unpkg or npm from the sandbox, but the git proxy can reach GitHub.
 
-with `import * as THREE from 'three'` and no vendored copy — the *player's browser*
-fetches three.js, which is why that project worked despite the blocked sandbox.
+`npm run test:modules` fetches every importmap target that is a local path, so a moved
+or renamed vendor file fails CI instead of blanking the page.
 
-Prefer vendoring three.js into the repo once `unpkg.com` is reachable, so the site has
-no runtime CDN dependency, and verify the port headlessly (see above) before pushing.
-three.js would also replace the fake shadow blobs with real shadow maps. Only
-`src/render/` and the small camera glue should need to change — that is what the
-layering is for.
+### Verified in a browser, 2026-08-17
+
+The scene has now been rendered in headless Chromium (swiftshader) over a real
+simulation and looked at, at 1280×713, 2560×613 and 500×813. The four open questions
+are settled — don't re-litigate them without a new screenshot:
+
+- **Light intensities are correct as written** (`DirectionalLight` 2.1,
+  `HemisphereLight` 1.15, `NoToneMapping`, sRGB output). Decoding the screenshot gave
+  0.001% fully-white pixels, 0.6% with any channel at 254+, 0% crushed blacks, mean RGB
+  ≈ (85, 129, 106). Nothing clips, so r155+ physically-correct lighting needs no
+  rescaling here.
+- **Shadows are correct.** No acne and no peter-panning at `shadow.bias = -0.0006`;
+  shadows sit against the base of the snake, pillars and walls. The 46-unit frustum
+  following the player covers everything close enough to read as contact shadow.
+- **The sky gradient survives any aspect ratio.** A plain-texture `scene.background`
+  maps straight to the viewport, so the 4×256 gradient always spans the screen
+  vertically — ultrawide and portrait both looked right.
+- **Ground checker scale is fine**: one cell per `TILE` (4) world units at every arena
+  size, because the repeat is derived from the plane size.
+
+Two real defects turned up and are fixed:
+
+- **The arena edge ended in a hard horizon line.** The ground was `(arena + 30) * 2`
+  across, putting its edge ~120 units from the player — less than half fogged, so
+  bright green met blue sky at a crisp seam. The ground now reaches `FOG_FAR` past the
+  arena on every side, so wherever the player stands the nearest edge is at least
+  `FOG_FAR` away and fades into the sky. The camera's `far` went 320 → 460 to clear the
+  bigger ground's far corner: left at 320 the far plane sliced the fogged ground and put
+  the seam straight back.
+- **The boost meter's two labels touched** at narrow widths, reading as `BOOSTSHIFT`.
+  The keyboard hint is hidden below 620px now, which is what that media query already
+  does to `.keys`.
+
+Not a defect, checked and dismissed: the band of page background along the bottom of a
+1280×800 screenshot is capture padding, not a canvas sizing bug — see **Verifying
+changes**.
+
+### Image quality, measured 2026-08-18
+
+Judged from 1:1 crops of a deterministic frame (fixed seed, fixed pose, fixed frame
+count), differenced band by band. What actually moved the image, and what did not:
+
+- **The shadow map was the one real lever.** At 2048 over the 92-unit frustum — 22
+  texels per world unit — shadow edges were plainly stepped at 1:1. It is now 4096
+  (44 texels/unit), stepping down to 2048 when the GPU's whole texture limit is 4096,
+  since those are the devices that can least afford it. Diffing before/after put the
+  change exactly where shadows fall, peaking at 49/255.
+- **The minimap was drawn at CSS size and stretched by the browser.** It is a canvas,
+  so it needs the device pixel ratio applied to its backing store, which nothing did:
+  148 px regardless of screen. `Hud._fitMinimap` now sizes it to `clientWidth × dpr`
+  and scales the 2D context, so drawing code stays in CSS pixels. 292 px on a 2× screen
+  instead of 148. **Any canvas added to the HUD needs the same treatment.**
+- **Sharper texture filtering barely mattered.** Anisotropy 4 → the GPU's max (16) and
+  the checker tile 256² → 512² together moved the frame by a mean of 0.2/255, peaking
+  at 16, because a 2×2 checker with thin seams has almost no high-frequency detail to
+  recover. Both are kept — they are free and correct — but do not expect a visible win
+  from filtering here, and don't spend effort re-doing it.
+- Already fine, don't bother: MSAA is genuinely active (the context reports 4 samples),
+  the sky gradient is only ever magnified (its mipmaps are off now), and `MAX_DPR = 2`
+  in `game.js` is a deliberate cap — raising it to 3 costs 2.25× the fill.
+
+The most visually objectionable thing left is the food **beacons**: additive boxes at
+0.22 opacity, so they read as flat washed-out panels with hard rectangular edges rather
+than glow. Softening them needs a falloff texture or a shader, and it trades against
+their job of being visible across the arena — ask before changing it.

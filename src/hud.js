@@ -6,7 +6,7 @@
  * world, it never changes it.
  */
 
-import { PALETTE } from './render/palette.js';
+import { PALETTE, rgb255 } from './render/palette.js';
 
 const DEATH_TEXT = {
   wall: 'You slithered straight into the wall.',
@@ -132,10 +132,29 @@ export class Hud {
 
   // ------------------------------------------------------------------- minimap
 
+  /**
+   * Match the backing store to the CSS box times the device pixel ratio, then
+   * draw in CSS pixels. Without this the map is always drawn at its 148 px
+   * attribute size and rescaled by the browser, which is visibly soft on any
+   * retina or phone screen. Returns the CSS size to draw in, or 0 if hidden.
+   */
+  _fitMinimap() {
+    const canvas = this.minimap;
+    const css = canvas.clientWidth || canvas.width;
+    if (!css) return 0;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const want = Math.max(1, Math.round(css * dpr));
+    if (canvas.width !== want) canvas.width = canvas.height = want;
+    const s = want / css;
+    this.minimapCtx.setTransform(s, 0, 0, s, 0, 0);
+    return css;
+  }
+
   drawMinimap(world) {
     const ctx = this.minimapCtx;
     if (!ctx) return;
-    const size = this.minimap.width;
+    const size = this._fitMinimap();
+    if (!size) return;
     const arena = world.cfg.arena;
     const scale = size / (arena * 2 + 6);
     const toX = (x) => size / 2 + x * scale;
@@ -173,7 +192,7 @@ export class Hud {
     for (const r of world.rivals) {
       if (!r.snake.alive) continue;
       const tint = PALETTE.rivals[r.tint % PALETTE.rivals.length][0];
-      trace(r.snake, 'rgba(' + tint.map((c) => Math.round(c * 255)).join(',') + ',0.9)', 2);
+      trace(r.snake, 'rgba(' + rgb255(tint) + ',0.9)', 2);
     }
     if (world.player.body.length) trace(world.player, 'rgba(120, 235, 100, 0.95)', 2.4);
 

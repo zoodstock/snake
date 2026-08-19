@@ -1,103 +1,251 @@
 /*
- * Renderer: blocky, Roblox-flavoured look built from one instanced cube.
- * Draw order per frame: sky gradient -> ground -> soft shadows -> solids -> glows.
+ * Renderer, built on three.js.
+ *
+ * The blocky look comes from drawing nearly everything as instanced boxes, in
+ * four meshes:
+ *
+ *   scenery  - walls and pillars. Static: rebuilt only when the arena changes.
+ *   bodies   - snakes and particles. Rewritten every frame.
+ *   glow     - unlit boxes: food, eyes, tongue. Reads as emissive.
+ *   beacons  - additive columns over the food, visible across the arena.
+ *
+ * The renderer only reads the world. It never changes it.
  */
-import { mat4, identity, multiply, perspective, lookAt } from './mat4.js';
+
+import * as THREE from 'three';
 import { rotateY } from '../sim/math.js';
-import { PALETTE } from './palette.js';
-import * as SH from './shaders.js';
-import {
-  createContext, Program, Mesh, InstanceBatch, cubeGeometry, quadGeometry,
-} from './gl.js';
+import { PALETTE, brighten } from './palette.js';
+
+const CAPACITY = { scenery: 1600, bodies: 2400, glow: 160, beacons: 48 };
+
+const FOG_NEAR = 55;
+const FOG_FAR = 200;
+const TILE = 4;                  // ground checker cell, in world units
+
+/** Reusable scratch objects so the frame loop allocates nothing. */
+const _pos = new THREE.Vector3();
+const _scale = new THREE.Vector3();
+const _quat = new THREE.Quaternion();
+const _euler = new THREE.Euler();
+const _matrix = new THREE.Matrix4();
+const _color = new THREE.Color();
+
+/**
+ * A growable-until-full instanced box batch. `add()` during the frame, then
+ * `commit()` once — that is when the GPU buffers are flagged.
+ */
+class BoxBatch {
+  constructor(material, capacity, opts) {
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    this.mesh = new THREE.InstancedMesh(geometry, material, capacity);
+    this.mesh.count = 0;
+    // Instances move every frame, so let three skip the (now meaningless) cull.
+    this.mesh.frustumCulled = false;
+    this.mesh.castShadow = !!(opts && opts.castShadow);
+    this.mesh.receiveShadow = !!(opts && opts.receiveShadow);
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.capacity = capacity;
+    this.n = 0;
+  }
+
+  clear() { this.n = 0; return this; }
+
+  /** `scale` is a number or [x, y, z]; `rotY` radians; `hex` a colour. */
+  add(x, y, z, scale, rotY, hex) {
+    if (this.n >= this.capacity) return this;
+    _pos.set(x, y, z);
+    if (typeof scale === 'number') _scale.set(scale, scale, scale);
+    else _scale.set(scale[0], scale[1], scale[2]);
+    _euler.set(0, rotY, 0);
+    _quat.setFromEuler(_euler);
+    _matrix.compose(_pos, _quat, _scale);
+    this.mesh.setMatrixAt(this.n, _matrix);
+    this.mesh.setColorAt(this.n, _color.set(hex));
+    this.n++;
+    return this;
+  }
+
+  commit() {
+    this.mesh.count = this.n;
+    this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+  }
+}
+
+/** A 2x2 checker tile with faint seams, drawn once into a canvas. */
+function groundTexture() {
+  const px = 256;                       // pixels per world tile
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = px * 2;
+  const ctx = canvas.getContext('2d');
+  const cells = [
+    [0, 0, PALETTE.grassA], [1, 0, PALETTE.grassB],
+    [0, 1, PALETTE.grassB], [1, 1, PALETTE.grassA],
+  ];
+  for (const [cx, cy, hex] of cells) {
+    ctx.fillStyle = '#' + hex.toString(16).padStart(6, '0');
+    ctx.fillRect(cx * px, cy * px, px, px);
+  }
+  ctx.strokeStyle = '#' + PALETTE.grassLine.toString(16).padStart(6, '0');
+  ctx.lineWidth = 3;
+  ctx.globalAlpha = 0.5;
+  for (const at of [0, px, px * 2]) {
+    ctx.beginPath(); ctx.moveTo(at, 0); ctx.lineTo(at, px * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, at); ctx.lineTo(px * 2, at); ctx.stroke();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  return texture;
+}
+
+/** Vertical sky gradient, horizon colour matched to the fog so they blend. */
+function skyTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 4;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, 256);
+  const hex = (h) => '#' + h.toString(16).padStart(6, '0');
+  gradient.addColorStop(0, hex(PALETTE.sky));
+  gradient.addColorStop(0.55, hex(PALETTE.skyHorizon));
+  gradient.addColorStop(1, hex(PALETTE.fog));
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 4, 256);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  // Drawn full-screen, so it is always magnified: mips would only cost memory.
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  return texture;
+}
 
 export class Renderer {
   constructor(canvas) {
-    const ctx = createContext(canvas);
-    if (!ctx) throw new Error('WebGL is not available in this browser.');
     this.canvas = canvas;
-    this.gl = ctx.gl;
-    this.instanced = ctx.instanced;
-    const gl = this.gl;
+    this.three = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    this.three.shadowMap.enabled = true;
+    this.three.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    this.solidProg = new Program(gl, SH.SOLID_VERT, SH.SOLID_FRAG, 'solid');
-    this.blendProg = new Program(gl, SH.BLEND_VERT, SH.BLEND_FRAG, 'blend');
-    this.groundProg = new Program(gl, SH.GROUND_VERT, SH.GROUND_FRAG, 'ground');
-    this.skyProg = new Program(gl, SH.SKY_VERT, SH.SKY_FRAG, 'sky');
+    this.scene = new THREE.Scene();
+    this.scene.background = skyTexture();
+    this.scene.fog = new THREE.Fog(PALETTE.fog, FOG_NEAR, FOG_FAR);
 
-    const cube = cubeGeometry();
-    const quad = quadGeometry();
-    this.cube = new Mesh(gl, cube.vertices, cube.indices);
-    this.quad = new Mesh(gl, quad.vertices, quad.indices);
+    // far has to clear the ground's far corner (see render()), otherwise the far
+    // plane slices the fogged ground and puts the hard horizon back.
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.5, 460);
 
-    this.solids = new InstanceBatch(gl, ctx.instanced, 4096);
-    this.shadows = new InstanceBatch(gl, ctx.instanced, 1024);
-    this.glows = new InstanceBatch(gl, ctx.instanced, 256);
+    this.scene.add(new THREE.HemisphereLight(PALETTE.skyHorizon, PALETTE.grassA, 1.15));
+    this.sun = new THREE.DirectionalLight(0xfff3e0, 2.1);
+    this.sun.castShadow = true;
+    // 2048 over the 92-unit frustum below is 22 texels per world unit, and the
+    // shadow edges were visibly stepped at 1:1. 4096 doubles that; the scene is
+    // only ~10k triangles in 6 draw calls, so the depth-only pass is cheap next to
+    // how much of the frame shadows cover. A GPU whose whole texture limit is 4096
+    // is not one to spend all of it on a shadow map, so those stay at 2048.
+    const shadowPx = this.three.capabilities.maxTextureSize >= 8192 ? 4096 : 2048;
+    this.sun.shadow.mapSize.set(shadowPx, shadowPx);
+    this.sun.shadow.bias = -0.0006;
+    const shadowCam = this.sun.shadow.camera;
+    shadowCam.left = -46; shadowCam.right = 46;
+    shadowCam.top = 46; shadowCam.bottom = -46;
+    shadowCam.near = 1; shadowCam.far = 200;
+    shadowCam.updateProjectionMatrix();
+    this.scene.add(this.sun);
+    this.scene.add(this.sun.target);
 
-    this.proj = mat4();
-    this.view = mat4();
-    this.viewProj = mat4();
-    this.lightDir = (() => {
-      const v = [0.42, 0.82, 0.38];
-      const l = Math.hypot(v[0], v[1], v[2]);
-      return [v[0] / l, v[1] / l, v[2] / l];
-    })();
-    this.fogDensity = 0.0115;
-    this.walls = null;
+    // Ground. Sized in render() once the arena is known.
+    this.groundTexture = groundTexture();
+    this.groundTexture.anisotropy = this.three.capabilities.getMaxAnisotropy();
+    this.ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshLambertMaterial({ map: this.groundTexture }),
+    );
+    this.ground.rotation.x = -Math.PI / 2;
+    this.ground.receiveShadow = true;
+    this.scene.add(this.ground);
+    this._groundSized = 0;
+
+    this.scenery = new BoxBatch(
+      new THREE.MeshLambertMaterial(), CAPACITY.scenery,
+      { castShadow: true, receiveShadow: true },
+    );
+    this.bodies = new BoxBatch(
+      new THREE.MeshLambertMaterial(), CAPACITY.bodies,
+      { castShadow: true, receiveShadow: true },
+    );
+    this.glow = new BoxBatch(new THREE.MeshBasicMaterial(), CAPACITY.glow, {});
+    this.beacons = new BoxBatch(new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.22,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }), CAPACITY.beacons, {});
+
+    for (const batch of [this.scenery, this.bodies, this.glow, this.beacons]) {
+      this.scene.add(batch.mesh);
+    }
+
+    this._sceneryFor = null;      // the obstacles array the scenery was built from
     this.width = 1;
     this.height = 1;
-
-    gl.enable(gl.DEPTH_TEST);
-    gl.enable(gl.CULL_FACE);
-    gl.cullFace(gl.BACK);
   }
 
   resize(cssWidth, cssHeight, dpr) {
-    const w = Math.max(1, Math.round(cssWidth * dpr));
-    const h = Math.max(1, Math.round(cssHeight * dpr));
-    if (this.canvas.width !== w || this.canvas.height !== h) {
-      this.canvas.width = w;
-      this.canvas.height = h;
-    }
-    this.width = w;
-    this.height = h;
-  }
-
-  /** Perimeter wall blocks, built once per world. */
-  _buildWalls(arena) {
-    if (this.walls) return this.walls;
-    const blocks = [];
-    const step = 2, edge = arena + 1;
-    for (let t = -arena; t <= arena; t += step) {
-      for (const [x, z] of [[t, -edge], [t, edge], [-edge, t], [edge, t]]) {
-        const wave = Math.abs(Math.round(t / step)) % 5;
-        const height = wave === 0 ? 4 : 3;
-        const color = wave === 0 ? PALETTE.wallAccent : (wave % 2 ? PALETTE.wallA : PALETTE.wallB);
-        blocks.push({ x, z, height, color });
-      }
-    }
-    for (const sx of [-1, 1]) {
-      for (const sz of [-1, 1]) {
-        blocks.push({ x: sx * edge, z: sz * edge, height: 6, color: PALETTE.wallAccent });
-      }
-    }
-    this.walls = { arena, blocks };
-    return this.walls;
-  }
-
-  setCamera(cam, aspect) {
-    perspective(this.proj, cam.fov * Math.PI / 180, aspect, 0.5, 260);
-    lookAt(this.view, cam.position, cam.target, [0, 1, 0]);
-    multiply(this.viewProj, this.proj, this.view);
-    this.camPos = cam.position;
+    const w = Math.max(1, Math.floor(cssWidth));
+    const h = Math.max(1, Math.floor(cssHeight));
+    this.three.setPixelRatio(dpr);
+    this.three.setSize(w, h, false);        // false: CSS already sizes the canvas
+    this.width = this.canvas.width;
+    this.height = this.canvas.height;
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
   }
 
   // --------------------------------------------------------------- scene fill
 
-  _addSnake(snake, colors, opts) {
-    const solids = this.solids, shadows = this.shadows;
-    const glow = opts && opts.glow ? opts.glow : 0;
+  /** Walls and pillars only change when a new arena is generated. */
+  _buildScenery(world) {
+    if (this._sceneryFor === world.obstacles) return;
+    this._sceneryFor = world.obstacles;
+
+    const arena = world.cfg.arena;
+    const batch = this.scenery.clear();
+    const edge = arena + 1;
+    for (let t = -arena; t <= arena; t += 2) {
+      for (const [x, z] of [[t, -edge], [t, edge], [-edge, t], [edge, t]]) {
+        const wave = Math.abs(Math.round(t / 2)) % 5;
+        const height = wave === 0 ? 4 : 3;
+        const hex = wave === 0 ? PALETTE.wallAccent : (wave % 2 ? PALETTE.wallA : PALETTE.wallB);
+        for (let level = 0; level < height; level++) {
+          batch.add(x, level + 0.5, z, [2, 1, 2], 0, hex);
+        }
+      }
+    }
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        for (let level = 0; level < 6; level++) {
+          batch.add(sx * edge, level + 0.5, sz * edge, [2, 1, 2], 0, PALETTE.wallAccent);
+        }
+      }
+    }
+
+    for (const o of world.obstacles) {
+      const base = PALETTE.obstacle[o.tint % PALETTE.obstacle.length];
+      for (let level = 0; level < o.height; level++) {
+        // Nudge alternate courses so stacks read as stacked blocks, not columns.
+        const jitter = (level % 2) ? 0.06 : -0.04;
+        batch.add(o.x + jitter, level + 0.5, o.z - jitter, [o.size, 1, o.size], 0, base);
+      }
+    }
+    batch.commit();
+  }
+
+  _addSnake(snake, colors, boosting) {
+    const batch = this.bodies;
     const body = snake.body;
     const total = Math.max(1, body.length);
+    const glowT = boosting ? 0.32 : 0;
 
     for (let i = body.length - 1; i >= 0; i--) {
       const seg = body[i];
@@ -106,158 +254,106 @@ export class Renderer {
       const wave = Math.sin(snake.phase - i * 0.55);
       const y = size * 0.5 + wave * 0.12 + 0.04;
       const stripe = (i % 4) < 2 ? colors[0] : colors[1];
-      const emissive = glow * (0.35 + 0.3 * wave);
       const length = Math.max(size, snake.spacing * 1.62);   // overlap the neighbours
-      solids.add(seg.x, y, seg.z, [size, size * 0.92, length], seg.yaw, emissive, stripe);
-      if (i % 2 === 0) {
-        shadows.add(seg.x, 0.02, seg.z, size * 2.1, 0, 0.42, [0, 0, 0]);
-      }
+      const hex = glowT ? brighten(stripe, glowT * (0.6 + 0.4 * wave)) : stripe;
+      batch.add(seg.x, y, seg.z, [size, size * 0.92, length], seg.yaw, hex);
     }
 
     // Head, crest, eyes and tongue in the head's local frame. The chase camera
     // mostly sees the head from behind, so the silhouette has to do the work.
     const headSize = 1.44;
     const headY = headSize * 0.5 + Math.sin(snake.phase) * 0.06 + 0.05;
-    const headColor = colors[2] || colors[0];
-    solids.add(snake.x, headY, snake.z, [headSize, headSize * 0.84, headSize * 1.3], snake.yaw, glow * 0.5, headColor);
-    shadows.add(snake.x, 0.02, snake.z, headSize * 2.3, 0, 0.46, [0, 0, 0]);
+    const headHex = glowT ? brighten(colors[2], glowT * 0.7) : colors[2];
+    batch.add(snake.x, headY, snake.z,
+      [headSize, headSize * 0.84, headSize * 1.3], snake.yaw, headHex);
 
-    const place = (lx, ly, lz, scale, emissive, color) => {
+    const place = (target, lx, ly, lz, scale, hex) => {
       const [wx, wz] = rotateY(lx, lz, snake.yaw);
-      solids.add(snake.x + wx, headY + ly, snake.z + wz, scale, snake.yaw, emissive, color);
+      target.add(snake.x + wx, headY + ly, snake.z + wz, scale, snake.yaw, hex);
     };
-    // Crest ridge along the top, so you can pick your head out of your own body.
-    place(0, headSize * 0.44, -0.1, [headSize * 0.42, 0.26, headSize * 1.0], glow * 0.6, colors[1]);
+    place(batch, 0, headSize * 0.44, -0.1, [headSize * 0.42, 0.26, headSize], colors[1]);
     for (const side of [-1, 1]) {
-      place(side * 0.4, 0.28, 0.46, 0.34, 0.25, PALETTE.eye);
-      place(side * 0.4, 0.28, 0.63, [0.19, 0.19, 0.07], 0, PALETTE.pupil);
+      place(this.glow, side * 0.4, 0.28, 0.46, 0.34, PALETTE.eye);
+      place(batch, side * 0.4, 0.28, 0.63, [0.19, 0.19, 0.07], PALETTE.pupil);
     }
     const flick = 0.28 + Math.max(0, Math.sin(snake.phase * 0.7)) * 0.35;
-    place(0, -0.16, 0.62 + flick * 0.5, [0.09, 0.07, flick], 0.2, PALETTE.tongue);
+    place(this.glow, 0, -0.16, 0.62 + flick * 0.5, [0.09, 0.07, flick], PALETTE.tongue);
   }
 
-  _addWorld(world, time) {
-    const solids = this.solids, shadows = this.shadows, glows = this.glows;
-    solids.clear(); shadows.clear(); glows.clear();
+  _fill(world) {
+    this._buildScenery(world);
 
-    const walls = this._buildWalls(world.cfg.arena);
-    for (const b of walls.blocks) {
-      for (let level = 0; level < b.height; level++) {
-        const shade = 1 - level * 0.05;
-        solids.add(b.x, level + 0.5, b.z, [2, 1, 2], 0, 0,
-          [b.color[0] * shade, b.color[1] * shade, b.color[2] * shade]);
-      }
-    }
-
-    for (const o of world.obstacles) {
-      const base = PALETTE.obstacle[o.tint % PALETTE.obstacle.length];
-      for (let level = 0; level < o.height; level++) {
-        const shade = 0.82 + 0.18 * (level / Math.max(1, o.height - 1));
-        const jitter = ((level % 2) ? 0.06 : -0.04);
-        solids.add(o.x + jitter, level + 0.5, o.z - jitter, [o.size, 1, o.size], 0, 0,
-          [base[0] * shade, base[1] * shade, base[2] * shade]);
-      }
-      shadows.add(o.x, 0.02, o.z, o.size * 1.75, 0, 0.5, [0, 0, 0]);
-    }
+    const bodies = this.bodies.clear();
+    const glow = this.glow.clear();
+    const beacons = this.beacons.clear();
 
     for (const f of world.foods) {
-      const color = f.golden ? PALETTE.foodGold : PALETTE.food;
+      const hex = f.golden ? PALETTE.foodGold : PALETTE.food;
       const bob = Math.sin(f.phase) * 0.22;
       const size = f.golden ? 1.05 : 0.85;
-      const pulse = 0.45 + 0.3 * (0.5 + 0.5 * Math.sin(f.phase * 2));
-      solids.add(f.x, 1.05 + bob, f.z, size, f.phase * 0.9, pulse, color);
-      solids.add(f.x, 1.05 + bob + size * 0.62, f.z, [0.16, 0.3, 0.16], f.phase * 0.9, 0.2, PALETTE.grassLine);
-      shadows.add(f.x, 0.02, f.z, size * 2.0, 0, 0.34, [0, 0, 0]);
-      glows.add(f.x, 3.0, f.z, [size * 1.7, 6.4, size * 1.7], 0, f.golden ? 0.5 : 0.34, color);
+      glow.add(f.x, 1.05 + bob, f.z, size, f.phase * 0.9, hex);
+      bodies.add(f.x, 1.05 + bob + size * 0.62, f.z, [0.16, 0.3, 0.16], f.phase * 0.9, PALETTE.grassLine);
+      beacons.add(f.x, 3.2, f.z, [size * 1.7, 6.4, size * 1.7], 0, hex);
     }
 
     for (const rival of world.rivals) {
       if (!rival.snake.alive) continue;
-      const colors = PALETTE.rivals[rival.tint % PALETTE.rivals.length];
-      this._addSnake(rival.snake, colors, { glow: rival.snake.boosting ? 0.4 : 0 });
+      this._addSnake(rival.snake, PALETTE.rivals[rival.tint % PALETTE.rivals.length],
+        rival.snake.boosting);
     }
-
     if (world.player.alive) {
-      const colors = [PALETTE.playerBody[0], PALETTE.playerBody[1], PALETTE.playerHead];
-      this._addSnake(world.player, colors, { glow: world.player.boosting ? 0.55 : 0 });
+      this._addSnake(world.player,
+        [PALETTE.playerBody[0], PALETTE.playerBody[1], PALETTE.playerHead],
+        world.player.boosting);
     }
 
     for (const p of world.particles) {
       const fade = Math.max(0, Math.min(1, p.life / p.maxLife));
       const size = p.size * (0.4 + 0.6 * fade);
-      solids.add(p.x, p.y, p.z, size, p.rot, 0.25, p.color);
+      // Particles carry [r,g,b] in 0..1 from the simulation.
+      const hex = (Math.round(p.color[0] * 255) << 16) |
+        (Math.round(p.color[1] * 255) << 8) | Math.round(p.color[2] * 255);
+      bodies.add(p.x, p.y, p.z, size, p.rot, hex);
     }
 
-    this._time = time;
+    bodies.commit();
+    glow.commit();
+    beacons.commit();
   }
 
   // -------------------------------------------------------------------- draw
 
   render(world, cam) {
-    const gl = this.gl;
-    this._addWorld(world, world.time);
-    this.setCamera(cam, this.width / this.height);
+    const arena = world.cfg.arena;
+    if (this._groundSized !== arena) {
+      // The ground has to reach a full fog distance past the arena on every
+      // side: anywhere the player can stand, the nearest edge is then at least
+      // FOG_FAR away and fades into the sky. At (arena + 30) the edge came out
+      // less than half fogged and read as a hard horizon line. Rounded up to a
+      // whole number of checker cells so the texture does not wrap mid-cell.
+      const cell = TILE * 2;
+      const size = Math.ceil((arena + FOG_FAR) * 2 / cell) * cell;
+      this.ground.geometry.dispose();
+      this.ground.geometry = new THREE.PlaneGeometry(size, size);
+      this.groundTexture.repeat.set(size / cell, size / cell);
+      this._groundSized = arena;
+    }
 
-    gl.viewport(0, 0, this.width, this.height);
-    gl.depthMask(true);
-    gl.clearColor(PALETTE.fog[0], PALETTE.fog[1], PALETTE.fog[2], 1);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    this._fill(world);
 
-    // Sky gradient behind everything.
-    gl.disable(gl.DEPTH_TEST);
-    gl.disable(gl.CULL_FACE);
-    this.skyProg.use()
-      .set('u_top', PALETTE.skyTop[0], PALETTE.skyTop[1], PALETTE.skyTop[2])
-      .set('u_horizon', PALETTE.skyHorizon[0], PALETTE.skyHorizon[1], PALETTE.skyHorizon[2]);
-    this.quad.bind();
-    gl.drawElements(gl.TRIANGLES, this.quad.count, gl.UNSIGNED_SHORT, 0);
-    gl.enable(gl.DEPTH_TEST);
-    gl.enable(gl.CULL_FACE);
+    // Keep the shadow frustum over the player rather than the whole arena.
+    const px = world.player.x, pz = world.player.z;
+    this.sun.position.set(px + 38, 66, pz + 26);
+    this.sun.target.position.set(px, 0, pz);
+    this.sun.target.updateMatrixWorld();
 
-    // Ground.
-    const g = this.groundProg.use();
-    g.setMat4('u_viewProj', this.viewProj);
-    g.set('u_size', (world.cfg.arena + 30) * 2);
-    g.set('u_arena', world.cfg.arena);
-    g.set('u_camPos', this.camPos[0], this.camPos[1], this.camPos[2]);
-    g.set('u_colA', PALETTE.grassA[0], PALETTE.grassA[1], PALETTE.grassA[2]);
-    g.set('u_colB', PALETTE.grassB[0], PALETTE.grassB[1], PALETTE.grassB[2]);
-    g.set('u_colLine', PALETTE.grassLine[0], PALETTE.grassLine[1], PALETTE.grassLine[2]);
-    g.set('u_colEdge', PALETTE.edgeWarn[0], PALETTE.edgeWarn[1], PALETTE.edgeWarn[2]);
-    g.set('u_fogColor', PALETTE.fog[0], PALETTE.fog[1], PALETTE.fog[2]);
-    g.set('u_fogDensity', this.fogDensity);
-    this.quad.bind();
-    gl.drawElements(gl.TRIANGLES, this.quad.count, gl.UNSIGNED_SHORT, 0);
+    if (this.camera.fov !== cam.fov) {
+      this.camera.fov = cam.fov;
+      this.camera.updateProjectionMatrix();
+    }
+    this.camera.position.set(cam.position[0], cam.position[1], cam.position[2]);
+    this.camera.lookAt(cam.target[0], cam.target[1], cam.target[2]);
 
-    // Contact shadows (alpha blended, no depth write).
-    const b = this.blendProg.use();
-    b.setMat4('u_viewProj', this.viewProj);
-    b.set('u_mode', 0);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.depthMask(false);
-    this.shadows.draw(this.quad);
-
-    // Solid geometry.
-    gl.disable(gl.BLEND);
-    gl.depthMask(true);
-    const s = this.solidProg.use();
-    s.setMat4('u_viewProj', this.viewProj);
-    s.set('u_lightDir', this.lightDir[0], this.lightDir[1], this.lightDir[2]);
-    s.set('u_camPos', this.camPos[0], this.camPos[1], this.camPos[2]);
-    s.set('u_fogColor', PALETTE.fog[0], PALETTE.fog[1], PALETTE.fog[2]);
-    s.set('u_fogDensity', this.fogDensity);
-    this.solids.draw(this.cube);
-
-    // Additive glow columns over the food.
-    const b2 = this.blendProg.use();
-    b2.setMat4('u_viewProj', this.viewProj);
-    b2.set('u_mode', 1);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-    gl.depthMask(false);
-    this.glows.draw(this.cube);
-    gl.depthMask(true);
-    gl.disable(gl.BLEND);
+    this.three.render(this.scene, this.camera);
   }
 }

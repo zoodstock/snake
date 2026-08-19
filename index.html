@@ -305,6 +305,9 @@
     .stat b { font-size: 20px; }
     .boost-wrap { width: 110px; }
     .keys { display: none; }
+    /* Same reason the key hints go: no room, and no keyboard to hint at. Without
+       this the meter's two labels touch and read as one word. */
+    .boost-label span + span { display: none; }
     #stickBase { width: 112px; height: 112px; }
     #stickKnob { width: 48px; height: 48px; }
     #boostBtn { width: 84px; height: 84px; }
@@ -365,6 +368,13 @@
 
 <div id="fatal"></div>
 
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three-0.160.0/three.module.js"
+  }
+}
+</script>
 <script type="module" src="src/main.js"></script>
 </body>
 </html>

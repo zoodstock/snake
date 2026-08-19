@@ -4,9 +4,11 @@
  */
 import assert from 'node:assert';
 import * as M3 from '../src/sim/math.js';
-import * as MAT from '../src/render/mat4.js';
 import { Snake } from '../src/sim/snake.js';
 import { World } from '../src/sim/world.js';
+// The chase camera is pure maths over sim/math.js, so the stick tests can drive
+// the real one rather than a stand-in that cannot reproduce the bug below.
+import { ChaseCamera } from '../src/camera.js';
 
 let passed = 0;
 const failures = [];
@@ -30,26 +32,6 @@ function run(target, seconds, input, step) {
 
 console.log('math3d');
 
-test('perspective + lookAt put a point ahead of the camera on screen', () => {
-  const proj = MAT.perspective(MAT.mat4(), Math.PI / 3, 1.5, 0.5, 200);
-  const view = MAT.lookAt(MAT.mat4(), [0, 6, -12], [0, 1, 0], [0, 1, 0]);
-  const vp = MAT.multiply(MAT.mat4(), proj, view);
-  const p = [0, 1, 0, 1];
-  const clip = [0, 1, 2, 3].map((r) =>
-    vp[r] * p[0] + vp[4 + r] * p[1] + vp[8 + r] * p[2] + vp[12 + r] * p[3]);
-  assert.ok(clip[3] > 0, 'point should be in front of the camera');
-  const ndc = [clip[0] / clip[3], clip[1] / clip[3], clip[2] / clip[3]];
-  assert.ok(Math.abs(ndc[0]) < 0.05, 'centred horizontally, got ' + ndc[0]);
-  assert.ok(Math.abs(ndc[1]) < 0.6, 'roughly centred vertically, got ' + ndc[1]);
-  assert.ok(ndc[2] > -1 && ndc[2] < 1, 'inside the depth range');
-});
-
-test('matrix multiply matches identity behaviour', () => {
-  const a = MAT.perspective(MAT.mat4(), 1, 1, 0.1, 10);
-  const out = MAT.multiply(MAT.mat4(), a, MAT.identity(MAT.mat4()));
-  for (let i = 0; i < 16; i++) assert.ok(Math.abs(out[i] - a[i]) < 1e-6);
-});
-
 test('angleDelta takes the short way round', () => {
   assert.ok(Math.abs(M3.angleDelta(0.1, -0.1) - -0.2) < 1e-9);
   assert.ok(M3.angleDelta(3.0, -3.0) > 0, 'wraps across PI instead of turning back');
@@ -62,45 +44,59 @@ test('rotateY maps local +Z onto the heading', () => {
   assert.ok(Math.abs(z - Math.cos(yaw)) < 1e-9);
 });
 
-test('stickToHeading ignores the dead zone', () => {
-  assert.strictEqual(M3.stickToHeading(0, 0, 0), null);
-  assert.strictEqual(M3.stickToHeading(0.1, -0.1, 0), null, 'a resting thumb is not input');
-  assert.ok(M3.stickToHeading(0, 1, 0), 'a full push registers');
+test('stickHeading ignores the dead zone', () => {
+  assert.strictEqual(M3.stickHeading(null, 0, 0, 0), null);
+  assert.strictEqual(M3.stickHeading(null, 0.1, -0.1, 0), null, 'a resting thumb is not input');
+  assert.ok(M3.stickHeading(null, 0, 1, 0), 'a full push registers');
 });
 
-test('stickToHeading reads relative to the camera', () => {
-  // Camera looking along +Z: push up = +Z, push right = +X.
-  let h = M3.stickToHeading(0, 1, 0);
-  assert.ok(Math.abs(h.x) < 1e-6 && Math.abs(h.z - 1) < 1e-6, JSON.stringify(h));
-  h = M3.stickToHeading(1, 0, 0);
-  assert.ok(Math.abs(h.x - 1) < 1e-6 && Math.abs(h.z) < 1e-6, JSON.stringify(h));
+test('stickHeading reads relative to the camera', () => {
+  // Camera looking along +Z: push up = hold +Z, push right = hold +X.
+  assert.ok(Math.abs(M3.stickHeading(null, 0, 1, 0).yaw) < 1e-6);
+  assert.ok(Math.abs(M3.stickHeading(null, 1, 0, 0).yaw - Math.PI / 2) < 1e-6);
 
   // Camera turned a quarter turn: up now means +X, and right means -Z.
   const yaw = Math.PI / 2;
-  h = M3.stickToHeading(0, 1, yaw);
-  assert.ok(Math.abs(h.x - 1) < 1e-6 && Math.abs(h.z) < 1e-6, JSON.stringify(h));
-  h = M3.stickToHeading(1, 0, yaw);
-  assert.ok(Math.abs(h.x) < 1e-6 && Math.abs(h.z + 1) < 1e-6, JSON.stringify(h));
+  assert.ok(Math.abs(M3.stickHeading(null, 0, 1, yaw).yaw - yaw) < 1e-6);
+  assert.ok(Math.abs(M3.stickHeading(null, 1, 0, yaw).yaw - Math.PI) < 1e-6);
 });
 
-test('stickToHeading always returns a unit direction with scaled strength', () => {
-  for (const [x, y] of [[0.5, 0.5], [-1, 0.2], [0.3, -0.9], [1, 1]]) {
-    const h = M3.stickToHeading(x, y, 0.7);
-    assert.ok(Math.abs(Math.hypot(h.x, h.z) - 1) < 1e-6, 'unit length');
-    assert.ok(h.strength > 0 && h.strength <= 1, 'strength in range: ' + h.strength);
-  }
-  const light = M3.stickToHeading(0, 0.3, 0);
-  const full = M3.stickToHeading(0, 1, 0);
-  assert.ok(light.strength < full.strength, 'a small push is weaker than a full one');
+test('stickHeading scales strength with how far the stick is pushed', () => {
+  const light = M3.stickHeading(null, 0, 0.3, 0);
+  const full = M3.stickHeading(null, 0, 1, 0);
+  assert.ok(light.strength > 0 && light.strength < full.strength, 'a small push is weaker');
   assert.ok(Math.abs(full.strength - 1) < 1e-6, 'a full push maxes out');
 });
 
+test('stickHeading keeps its heading while the camera swings round behind', () => {
+  // The camera chasing the snake must not drag the target along with it.
+  let aim = M3.stickHeading(null, 1, 0, 0);
+  const wanted = aim.yaw;
+  for (let camYaw = 0; camYaw < Math.PI / 2; camYaw += 0.05) {
+    aim = M3.stickHeading(aim, 1, 0, camYaw);
+    assert.ok(Math.abs(M3.angleDelta(wanted, aim.yaw)) < 1e-9,
+      'heading drifted to ' + aim.yaw.toFixed(3) + ' at camera ' + camYaw.toFixed(2));
+  }
+});
+
+test('stickHeading re-points when the thumb actually moves', () => {
+  const held = M3.stickHeading(null, 1, 0, 0);
+  const nudged = M3.stickHeading(held, 0.99, 0.1, 1.0);
+  assert.strictEqual(nudged.refYaw, held.refYaw, 'a jitter inside the threshold holds');
+
+  const moved = M3.stickHeading(held, 0, 1, 1.0);
+  assert.strictEqual(moved.refYaw, 1.0, 'a real move re-reads the camera');
+  assert.ok(Math.abs(moved.yaw - 1.0) < 1e-6, 'and aims where the screen now points');
+
+  const rearmed = M3.stickHeading(M3.stickHeading(held, 0, 0, 0), 1, 0, 2.0);
+  assert.strictEqual(rearmed.refYaw, 2.0, 'letting go re-arms the next push');
+});
+
 test('a snake steers toward where the stick points, the short way round', () => {
-  const camYaw = 0;
   const s = new Snake({ x: 0, z: 0, yaw: 0 });
   const aim = (sx, sy) => {
-    const h = M3.stickToHeading(sx, sy, camYaw);
-    return s.steerToward(s.x + h.x * 8, s.z + h.z * 8);
+    const h = M3.stickHeading(null, sx, sy, 0);
+    return s.steerToward(s.x + Math.sin(h.yaw) * 8, s.z + Math.cos(h.yaw) * 8);
   };
   assert.ok(aim(1, 0.2) > 0, 'stick right turns right');
   assert.ok(aim(-1, 0.2) < 0, 'stick left turns left');
@@ -111,19 +107,36 @@ test('a snake steers toward where the stick points, the short way round', () => 
   assert.ok(aim(-1, 0) > 0, 'sign follows the camera, not the snake');
 });
 
-test('a stick held down actually turns the snake around', () => {
+test('a stick held sideways settles on a heading instead of circling', () => {
+  // The regression: reading the stick against the live camera every frame meant a
+  // sideways push never reached equilibrium, and the snake span on the spot.
   const w = new World({ seed: 77 });
   w.obstacles.length = 0;
   w.foods.length = 0;
   w.rivals.length = 0;
-  const start = w.player.yaw;
-  for (let i = 0; i < 60; i++) {
-    const h = M3.stickToHeading(1, 0, 0);            // hold right, camera fixed
-    const p = w.player;
-    w.update(1 / 60, { steer: p.steerToward(p.x + h.x * 8, p.z + h.z * 8) });
-  }
-  assert.ok(Math.abs(M3.angleDelta(start, w.player.yaw)) > 1, 'turned by ' +
-    M3.angleDelta(start, w.player.yaw).toFixed(2) + ' rad');
+  const p = w.player;
+  p.x = 0; p.z = 0; p.yaw = 0;
+
+  const cam = new ChaseCamera();
+  cam.snapTo(p);
+  const start = p.yaw;
+  let aim = null;
+  const step = () => {
+    aim = M3.stickHeading(aim, 1, 0, cam.yaw);       // hold right, camera free to chase
+    const turn = p.steerToward(p.x + Math.sin(aim.yaw) * 8, p.z + Math.cos(aim.yaw) * 8);
+    w.update(1 / 60, { steer: M3.clamp(turn * aim.strength, -1, 1) });
+    cam.update(1 / 60, p, true);
+  };
+
+  for (let i = 0; i < 120; i++) step();
+  const settled = p.yaw;
+  assert.ok(Math.abs(M3.angleDelta(start, settled) - Math.PI / 2) < 0.05,
+    'should have turned a quarter turn, turned ' + M3.angleDelta(start, settled).toFixed(3));
+
+  for (let i = 0; i < 120; i++) step();
+  assert.strictEqual(w.state, 'playing', 'the probe should not have died');
+  assert.ok(Math.abs(M3.angleDelta(settled, p.yaw)) < 1e-3,
+    'held still it must stop turning, drifted ' + M3.angleDelta(settled, p.yaw).toFixed(4));
 });
 
 console.log('snake');
