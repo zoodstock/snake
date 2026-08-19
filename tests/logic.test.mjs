@@ -44,85 +44,42 @@ test('rotateY maps local +Z onto the heading', () => {
   assert.ok(Math.abs(z - Math.cos(yaw)) < 1e-9);
 });
 
-test('stickHeading ignores the dead zone', () => {
-  assert.strictEqual(M3.stickHeading(null, 0, 0, 0), null);
-  assert.strictEqual(M3.stickHeading(null, 0.1, -0.1, 0), null, 'a resting thumb is not input');
-  assert.ok(M3.stickHeading(null, 0, 1, 0), 'a full push registers');
-});
-
-// The heading that travels RIGHT across the screen, for a camera at `camYaw`.
-// Screen right is world -X when the camera looks along +Z, because a three.js
-// camera looks down its local -Z and that flips the sideways axis. Measured by
-// projecting world axes through the real camera, not assumed — assuming it the
-// other way round is exactly what sent the snake the wrong way.
+// A snake turning toward the RIGHT of the screen ends up at camYaw - 90 degrees.
+// Screen right is world -X, because a three.js camera looks down its local -Z and
+// that flips the sideways axis. Measured by projecting world axes through the real
+// camera, not derived — assuming it the other way round steered everything
+// backwards, twice. Which also means a NEGATIVE steer turns toward screen right.
 const screenRight = (camYaw) => camYaw - Math.PI / 2;
-const screenLeft = (camYaw) => camYaw + Math.PI / 2;
 
-test('stickHeading reads relative to the camera', () => {
-  // Camera looking along +Z: push up holds +Z, push right goes right on screen.
-  assert.ok(Math.abs(M3.stickHeading(null, 0, 1, 0).yaw) < 1e-6);
-  assert.ok(Math.abs(M3.angleDelta(screenRight(0), M3.stickHeading(null, 1, 0, 0).yaw)) < 1e-6);
-  assert.ok(Math.abs(M3.angleDelta(screenLeft(0), M3.stickHeading(null, -1, 0, 0).yaw)) < 1e-6);
-
-  // Whichever way the camera faces, right on the stick is right on the screen.
-  const yaw = Math.PI / 2;
-  assert.ok(Math.abs(M3.angleDelta(yaw, M3.stickHeading(null, 0, 1, yaw).yaw)) < 1e-6);
-  assert.ok(Math.abs(M3.angleDelta(screenRight(yaw), M3.stickHeading(null, 1, 0, yaw).yaw)) < 1e-6);
+test('stickTurn ignores the dead zone', () => {
+  assert.ok(Math.abs(M3.stickTurn(0, 0)) < 1e-12);
+  assert.ok(Math.abs(M3.stickTurn(0.1, -0.1)) < 1e-12, 'a resting thumb is not input');
+  assert.ok(M3.stickTurn(1, 0) !== 0, 'a full push registers');
 });
 
-test('stickHeading scales strength with how far the stick is pushed', () => {
-  const light = M3.stickHeading(null, 0, 0.3, 0);
-  const full = M3.stickHeading(null, 0, 1, 0);
-  assert.ok(light.strength > 0 && light.strength < full.strength, 'a small push is weaker');
-  assert.ok(Math.abs(full.strength - 1) < 1e-6, 'a full push maxes out');
+test('stickTurn sends the snake the way the stick points', () => {
+  assert.ok(M3.stickTurn(1, 0) < 0, 'push right turns toward screen right');
+  assert.ok(M3.stickTurn(-1, 0) > 0, 'push left turns toward screen left');
+  assert.ok(Math.abs(M3.stickTurn(0, 1)) < 1e-12, 'push straight up holds the line');
+  assert.ok(Math.abs(M3.stickTurn(1, 0) + M3.stickTurn(-1, 0)) < 1e-12, 'left mirrors right');
+  assert.ok(Math.abs(M3.stickTurn(1, 0) + 1) < 1e-9, 'a full sideways push is full lock');
 });
 
-test('stickHeading keeps its heading while the camera swings round behind', () => {
-  // The camera chasing the snake must not drag the target along with it.
-  let aim = M3.stickHeading(null, 1, 0, 0);
-  const wanted = aim.yaw;
-  for (let camYaw = 0; camYaw < Math.PI / 2; camYaw += 0.05) {
-    aim = M3.stickHeading(aim, 1, 0, camYaw);
-    assert.ok(Math.abs(M3.angleDelta(wanted, aim.yaw)) < 1e-9,
-      'heading drifted to ' + aim.yaw.toFixed(3) + ' at camera ' + camYaw.toFixed(2));
-  }
+test('stickTurn is proportional to angle and to how far it is pushed', () => {
+  // Half way between straight up and hard right is half the turn rate.
+  const diagonal = M3.stickTurn(Math.SQRT1_2, Math.SQRT1_2);
+  assert.ok(Math.abs(diagonal + 0.5) < 1e-6, 'diagonal is half lock, got ' + diagonal);
+  assert.ok(Math.abs(diagonal) < Math.abs(M3.stickTurn(1, 0)), 'diagonal turns less than hard right');
+
+  // Same angle, pushed less far: same direction, gentler.
+  const light = M3.stickTurn(0.5, 0);
+  const full = M3.stickTurn(1, 0);
+  assert.ok(light < 0 && light > full, 'a small push is gentler: ' + light + ' vs ' + full);
 });
 
-test('stickHeading re-points when the thumb actually moves', () => {
-  const held = M3.stickHeading(null, 1, 0, 0);
-  const nudged = M3.stickHeading(held, 0.99, 0.1, 1.0);
-  assert.strictEqual(nudged.refYaw, held.refYaw, 'a jitter inside the threshold holds');
-
-  const moved = M3.stickHeading(held, 0, 1, 1.0);
-  assert.strictEqual(moved.refYaw, 1.0, 'a real move re-reads the camera');
-  assert.ok(Math.abs(moved.yaw - 1.0) < 1e-6, 'and aims where the screen now points');
-
-  const rearmed = M3.stickHeading(M3.stickHeading(held, 0, 0, 0), 1, 0, 2.0);
-  assert.strictEqual(rearmed.refYaw, 2.0, 'letting go re-arms the next push');
-});
-
-test('a snake steers toward where the stick points, the short way round', () => {
-  const s = new Snake({ x: 0, z: 0, yaw: 0 });
-  const aim = (sx, sy) => {
-    const h = M3.stickHeading(null, sx, sy, 0);
-    return s.steerToward(s.x + Math.sin(h.yaw) * 8, s.z + Math.cos(h.yaw) * 8);
-  };
-  // Turning toward screen right means turning toward camYaw - 90, so the steer
-  // this returns is negative. What matters is that the two are opposite and that
-  // straight up does nothing.
-  assert.ok(aim(1, 0.2) < 0, 'stick right steers toward screen right');
-  assert.ok(aim(-1, 0.2) > 0, 'stick left steers toward screen left');
-  assert.ok(Math.abs(aim(0, 1)) < 1e-6, 'stick forward holds the line');
-  assert.ok(aim(1, 0.2) === -aim(-1, 0.2), 'left and right are mirror images');
-
-  // Facing the other way, screen-left must still mean turn toward screen-left.
-  s.yaw = Math.PI;
-  assert.ok(aim(-1, 0) < 0, 'sign follows the camera, not the snake');
-});
-
-test('a stick held sideways settles on a heading instead of circling', () => {
-  // The regression: reading the stick against the live camera every frame meant a
-  // sideways push never reached equilibrium, and the snake span on the spot.
+test('a stick held sideways keeps turning, it does not settle', () => {
+  // This is the point of a rate control, and it is what the on-screen stick is
+  // expected to feel like: hold right and the snake keeps coming round.
   const w = new World({ seed: 77 });
   w.obstacles.length = 0;
   w.foods.length = 0;
@@ -132,25 +89,32 @@ test('a stick held sideways settles on a heading instead of circling', () => {
 
   const cam = new ChaseCamera();
   cam.snapTo(p);
-  const start = p.yaw;
-  let aim = null;
-  const step = () => {
-    aim = M3.stickHeading(aim, 1, 0, cam.yaw);       // hold right, camera free to chase
-    const turn = p.steerToward(p.x + Math.sin(aim.yaw) * 8, p.z + Math.cos(aim.yaw) * 8);
-    w.update(1 / 60, { steer: M3.clamp(turn * aim.strength, -1, 1) });
-    cam.update(1 / 60, p, true);
-  };
+  const turned = [];
+  let last = p.yaw;
+  for (let round = 0; round < 4; round++) {
+    for (let i = 0; i < 30; i++) {
+      w.update(1 / 60, { steer: M3.stickTurn(1, 0) });
+      cam.update(1 / 60, p, true);
+    }
+    turned.push(M3.angleDelta(last, p.yaw));
+    last = p.yaw;
+  }
+  for (const [i, d] of turned.entries()) {
+    assert.ok(d < -0.5, 'half-second ' + i + ' should keep turning right, turned ' + d.toFixed(3));
+  }
+});
 
-  for (let i = 0; i < 120; i++) step();
-  const settled = p.yaw;
-  assert.ok(Math.abs(M3.angleDelta(screenRight(start), settled)) < 0.05,
-    'should have settled on the screen-right heading, ended ' + settled.toFixed(3) +
-    ' wanted ' + screenRight(start).toFixed(3));
-
-  for (let i = 0; i < 120; i++) step();
-  assert.strictEqual(w.state, 'playing', 'the probe should not have died');
-  assert.ok(Math.abs(M3.angleDelta(settled, p.yaw)) < 1e-3,
-    'held still it must stop turning, drifted ' + M3.angleDelta(settled, p.yaw).toFixed(4));
+test('a quarter turn to the right lands on the screen-right heading', () => {
+  // Sanity-check the sign against the measured screen mapping: turn right for as
+  // long as it takes to sweep 90 degrees and that is where you end up.
+  const s = new Snake({ x: 0, z: 0, yaw: 0 });
+  const start = s.yaw;
+  const want = screenRight(start);
+  for (let i = 0; i < 600 && Math.abs(M3.angleDelta(want, s.yaw)) > 0.02; i++) {
+    s.update(1 / 120, M3.stickTurn(1, 0));
+  }
+  assert.ok(Math.abs(M3.angleDelta(want, s.yaw)) < 0.02,
+    'ended at ' + s.yaw.toFixed(3) + ', wanted ' + want.toFixed(3));
 });
 
 console.log('snake');

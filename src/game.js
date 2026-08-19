@@ -5,7 +5,7 @@
  */
 
 import { World } from './sim/world.js';
-import { clamp, stickHeading } from './sim/math.js';
+import { stickTurn } from './sim/math.js';
 import { Renderer } from './render/renderer.js';
 import { ChaseCamera } from './camera.js';
 import { Input } from './input/input.js';
@@ -37,7 +37,6 @@ export class Game {
     this.deadFor = 0;
     this.lastTime = 0;
     this._running = false;
-    this.stickAim = null;   // frozen stick reference frame, see readSteer
 
     this.input = new Input(this.canvas, {
       confirm: () => this.onConfirm(),
@@ -149,31 +148,16 @@ export class Game {
   }
 
   /**
-   * Keyboard and drag give a turn rate directly. A stick gives a direction — read
-   * relative to the camera, so "push left" means left on screen no matter which
-   * way the snake happens to face — and the snake turns onto it and holds it.
-   * `stickAim` carries the reference frame between frames; see stickHeading for
-   * why it cannot simply be this frame's camera yaw. How hard the stick is pushed
-   * scales the turn, so a nudge curves and a full push carves.
+   * Every input shape ends up as a turn rate, negative toward the right of the
+   * screen. Keyboard and drag hand one over directly; a stick's push angle becomes
+   * one, so holding it sideways keeps turning rather than settling on a heading.
+   * Keys win over the stick when both are live.
    */
   readSteer() {
     const keyed = this.input.steer;
-    if (keyed !== 0) {
-      this.stickAim = null;
-      return keyed;
-    }
+    if (keyed !== 0) return keyed;
     const stick = this.input.stick;
-    this.stickAim = stick
-      ? stickHeading(this.stickAim, stick.x, stick.y, this.camera.yaw)
-      : null;
-    const aim = this.stickAim;
-    if (!aim) return 0;
-    const player = this.world.player;
-    const turn = player.steerToward(
-      player.x + Math.sin(aim.yaw) * 8,
-      player.z + Math.cos(aim.yaw) * 8,
-    );
-    return clamp(turn * aim.strength, -1, 1);
+    return stick ? stickTurn(stick.x, stick.y) : 0;
   }
 
   frame(now) {

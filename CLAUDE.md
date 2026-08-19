@@ -34,7 +34,7 @@ src/game.js             frame loop, state machine (menu/playing/paused/dead), in
 src/hud.js              ALL DOM: stats, boost meter, minimap, flash, overlays
 src/camera.js           third-person chase camera
 
-src/sim/math.js         scalars, angles, stick → heading   (no DOM, no GL)
+src/sim/math.js         scalars, angles, stick → turn rate (no DOM, no GL)
 src/sim/snake.js        head movement, trail, body sampling
 src/sim/world.js        arena, food, obstacles, rival AI, collisions, scoring
 
@@ -63,19 +63,23 @@ Rules that are easy to break by accident:
 - Rival spawn logic (`_freeSpot` clearance, `_openHeading`) exists because rivals
   used to spawn on top of each other or nose-first into a block and die in a loop.
   Don't simplify it away; `npm test` covers it.
-- Steering has two shapes: keyboard/drag give a **turn rate**, sticks give a
-  **direction to hold** (`stickHeading`). Keep both.
-- `stickHeading` samples the camera yaw when a push *starts* and keeps it while the
-  thumb sits still; `Game.stickAim` carries that between frames. Do not "simplify" it
-  to this frame's camera yaw: the chase camera swings in behind the snake as it turns,
-  so the target swings too and any sideways push circles forever instead of settling.
-  `npm test` drives the real `ChaseCamera` to cover exactly that.
+- **Every input ends up as a turn rate, and negative turns toward the right of the
+  screen.** Keyboard and drag produce one directly (`Input.steer`); a stick's push
+  angle is converted by `stickTurn`, where the angle off straight-ahead sets how hard
+  it turns and how far out the stick is pushed scales that. One rule, one sign, in
+  `Game.readSteer`.
+- **A sideways push must keep turning.** A version that treated the stick as a
+  heading to settle on — freezing the camera yaw at the start of a push — was built,
+  measured, deployed and rejected in play: it turned 90° and then ran straight. Don't
+  reintroduce it. Holding right circling is the wanted behaviour, not a bug.
 - **Screen right is world −X**, not +X, when the camera looks along +Z: a three.js
-  camera looks down its local −Z, and that flips the sideways axis. So the stick
-  heading is `camYaw − stickAngle`, and the minimap's `toX` subtracts. This was got
-  backwards twice — once in the original port and once "verified" by deriving it on
-  paper — and it sends the snake the wrong way. **Never reason it out; measure it**
-  (see **Verifying changes**).
+  camera looks down its local −Z, and that flips the sideways axis. The simulation's
+  positive rotation goes toward +X, so a **negative** steer is the one that turns
+  right, and the minimap's `toX` subtracts. This was got backwards three times — in
+  the original port, again when "verified" by deriving it on paper, and once more in
+  the keyboard path after the stick path had been fixed. **Never reason it out;
+  measure it** (see **Verifying changes**), and check every input path, not just the
+  one being changed.
 
 Tuning constants live in `CFG` in `src/sim/world.js` and `DEFAULTS` in `src/sim/snake.js`.
 
@@ -83,7 +87,7 @@ Tuning constants live in `CFG` in `src/sim/world.js` and `DEFAULTS` in `src/sim/
 
 `npm test` runs two suites, neither needing a browser or network:
 
-- `tests/logic.test.mjs` — 37 simulation tests, deterministic (`World` takes a seed).
+- `tests/logic.test.mjs` — 35 simulation tests, deterministic (`World` takes a seed).
 - `tests/renderer.smoke.mjs` — drives the real renderer over a real simulation with
   three.js swapped for `tests/three-stub.mjs` (resolved by a loader hook). It proves
   the renderer runs and produces finite transforms inside its instance budgets. It
