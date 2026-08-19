@@ -27,37 +27,29 @@ export function rotateY(x, z, yaw) {
 }
 
 /**
- * Turn a stick push into a world heading for the snake to hold on to.
+ * Turn a stick push into a turn rate: -1 turns as hard as the snake can toward the
+ * RIGHT of the screen, +1 toward the left, 0 holds the line.
  *
- * Reading the stick against the live camera every frame cannot ever settle: the
- * chase camera swings in behind the snake as it turns, so the target swings with
- * it, and anything but a straight-up push circles forever. The camera yaw is
- * therefore sampled when the push starts and held while the thumb sits still, so
- * the snake reaches the direction you pointed at and stays on it. Moving the thumb
- * more than `repoint` re-aims against the view actually on screen, which is what
- * keeps steering continuous rather than one-shot.
+ * This is a rate, not a heading to settle on: a sideways push keeps turning for as
+ * long as it is held, which is what the stick is expected to feel like. There is
+ * therefore no camera yaw involved — the stick is read in screen space, and pushing
+ * right turns right whichever way the snake happens to face.
  *
- * `prev` is what this returned last frame, or null when the stick was at rest.
- * Returns null inside the dead zone, which also re-arms the next push.
+ * Sign: the simulation's positive rotation goes toward world +X, which is the LEFT
+ * of the screen, because a three.js camera looks down its local -Z (measured, not
+ * derived — see CLAUDE.md). So a push to the right yields a NEGATIVE steer.
+ *
+ * How far off straight-ahead the push is sets how hard it turns, and how far out the
+ * stick is pushed scales that, so a nudge curves and a full push carves. Returns 0
+ * inside the dead zone.
  */
-export function stickHeading(prev, sx, sy, camYaw, opts) {
+export function stickTurn(sx, sy, opts) {
   const cfg = opts || {};
   const dead = cfg.deadZone === undefined ? 0.24 : cfg.deadZone;
-  const repoint = cfg.repoint === undefined ? 0.21 : cfg.repoint;   // ~12 degrees
   const magnitude = Math.hypot(sx, sy);
-  if (magnitude < dead) return null;
+  if (magnitude < dead) return 0;
   // Rescale so the usable range starts at the dead zone edge, not at zero.
   const strength = clamp((magnitude - dead) / (1 - dead), 0, 1);
-  // Screen right is world -X when the camera looks along +Z, not +X: a three.js
-  // camera looks down its local -Z, so the handedness flips the sideways axis.
-  // Measured by projecting world axes with the real camera — see CLAUDE.md. Hence
-  // the heading is camYaw MINUS the stick angle; getting this backwards is what
-  // made the snake veer the wrong way.
   const angle = Math.atan2(sx, sy);        // 0 = straight up the screen, + = right
-  const yawFor = (ref, a) => ref - a;
-  if (prev && Math.abs(angleDelta(prev.angle, angle)) <= repoint) {
-    // Thumb held: keep the frozen angle too, so the heading does not creep.
-    return { refYaw: prev.refYaw, angle: prev.angle, yaw: yawFor(prev.refYaw, prev.angle), strength };
-  }
-  return { refYaw: camYaw, angle, yaw: yawFor(camYaw, angle), strength };
+  return clamp(-angle / (Math.PI / 2), -1, 1) * strength;
 }

@@ -84,11 +84,18 @@ export class Input {
     return null;
   }
 
-  /** Turn rate from the sources that steer directly rather than by direction. */
+  /**
+   * Turn rate from the sources that steer directly rather than by direction.
+   *
+   * NEGATIVE turns toward the right of the screen. The simulation's positive
+   * rotation goes toward world +X, and that is the LEFT of the screen (see
+   * `stickTurn` in sim/math.js), so pressing D or Right has to come out negative.
+   * Getting this the obvious way round steers every key input backwards.
+   */
   get steer() {
     let steer = 0;
-    for (const k of LEFT_KEYS) if (this.keys[k]) steer -= 1;
-    for (const k of RIGHT_KEYS) if (this.keys[k]) steer += 1;
+    for (const k of LEFT_KEYS) if (this.keys[k]) steer += 1;
+    for (const k of RIGHT_KEYS) if (this.keys[k]) steer -= 1;
     if (steer === 0 && this.pointerActive) steer = this.pointerSteer;
     return clamp(steer, -1, 1);
   }
@@ -147,7 +154,9 @@ export class Input {
     const updatePointer = (e) => {
       const rect = canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left) / Math.max(1, rect.width);
-      this.pointerSteer = clamp((x - 0.5) * 2.8, -1, 1);
+      // Same sign rule as `steer`: dragging right of centre must turn right, which
+      // is a negative steer.
+      this.pointerSteer = clamp((0.5 - x) * 2.8, -1, 1);
     };
     canvas.addEventListener('pointerdown', (e) => {
       if (this.stickVisible) return;
