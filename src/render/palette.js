@@ -25,6 +25,22 @@ export const PALETTE = {
   tongue: 0xf25c7f,
   food: 0xe8434f,
   foodGold: 0xffc63c,
+  foodBlue: 0x4ea8ff,
+  // What the player looks like in each shape a blue apple can grant, as
+  // [body A, body B, head]. Keyed by the form ids in sim/forms.js. All three stay
+  // clear of the rival palettes above so the player is still findable at a glance.
+  forms: {
+    kraken: [0x4b5f4a, 0x33422f, 0x5e7355],
+    abyss: [0x1b2432, 0x121927, 0x27354a],
+    twin: [0x8a6f45, 0x5c4a2e, 0xa08054],
+  },
+  // Trim colours the forms need on top of the usual body/head/eye set.
+  krakenMaw: 0xd8c9a8,      // the pale jaw and teeth
+  krakenTentacle: 0x8c9c6e,
+  abyssSpot: 0xdff2ff,      // the white flecks down the flanks
+  abyssVent: 0xff8a2b,      // the orange glow between the plates
+  abyssLure: 0xff3b30,      // the red tips on the feelers
+  twinBand: 0xd9c9a4,
   // Each rival gets [body A, body B, head].
   rivals: [
     [0xa661e8, 0x7d3fbf, 0xbb85f0],

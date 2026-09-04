@@ -3,7 +3,8 @@
  * scoring and particle bookkeeping. Pure logic — the renderer only reads it.
  */
 import { clamp } from './math.js';
-import { Snake } from './snake.js';
+import { Snake, DEFAULTS } from './snake.js';
+import { FORMS, nextForm } from './forms.js';
 export const CFG = {
   arena: 46,             // half-size of the playable square
   foodCount: 16,
@@ -16,6 +17,7 @@ export const CFG = {
   boostDrain: 0.34,      // stamina per second while boosting
   boostRegen: 0.2,
   boostFloor: 0.06,      // stamina needed to kick off a boost
+  blueChance: 0.055,     // share of food that spawns as a form-changing blue apple
   maxParticles: 320,
   rivalRespawn: [4, 8],
 };
@@ -54,6 +56,7 @@ export class World {
     this.kills = 0;
     this.eaten = 0;
     this.deathCause = '';
+    this.formId = 'snake';
     this.particles = [];
     this.events = [];
 
@@ -65,6 +68,9 @@ export class World {
     for (let i = 0; i < cfg.rivalCount; i++) this.rivals.push(this._makeRival(i));
     return this;
   }
+
+  /** Stats for the shape the player is currently wearing. */
+  get form() { return FORMS[this.formId] || FORMS.snake; }
 
   // ---------------------------------------------------------------- spawning
 
@@ -164,13 +170,16 @@ export class World {
 
   _makeFood() {
     const spot = this._freeSpot(9);
-    const golden = this.rng() < 0.12;
+    // Blue first, so the two special kinds never land on the same apple.
+    const blue = this.rng() < this.cfg.blueChance;
+    const golden = !blue && this.rng() < 0.12;
     return {
       x: spot.x, z: spot.z,
       golden,
-      value: golden ? 30 : 10,
-      growth: golden ? 7 : 3,
-      radius: golden ? 0.62 : 0.5,
+      blue,
+      value: blue ? 15 : golden ? 30 : 10,
+      growth: blue ? 2 : golden ? 7 : 3,
+      radius: blue ? 0.7 : golden ? 0.62 : 0.5,
       phase: this.rng() * 6.283,
     };
   }
@@ -311,14 +320,27 @@ export class World {
     return this.events;
   }
 
+  /** Blue apple: take a different shape, and keep it until the next one. */
+  _morph() {
+    const from = this.formId;
+    this.formId = nextForm(from, this.rng);
+    // The only stat the snake itself owns; the rest are read off the form.
+    this.player.boostSpeed = DEFAULTS.boostSpeed * this.form.boostSpeed;
+    this.spawnBurst(this.player.x, 1.1, this.player.z, 26, [0.35, 0.72, 1]);
+    this.events.push({
+      type: 'morph', from, form: this.formId, x: this.player.x, z: this.player.z,
+    });
+  }
+
   _updatePlayer(dt, input) {
     const player = this.player;
     let boost = !!input.boost;
     if (boost && this.stamina <= this.cfg.boostFloor) boost = false;
+    const form = this.form;
     if (boost) {
-      this.stamina = Math.max(0, this.stamina - this.cfg.boostDrain * dt);
+      this.stamina = Math.max(0, this.stamina - this.cfg.boostDrain * form.boostDrain * dt);
     } else {
-      this.stamina = Math.min(1, this.stamina + this.cfg.boostRegen * dt);
+      this.stamina = Math.min(1, this.stamina + this.cfg.boostRegen * form.boostRegen * dt);
     }
 
     player.update(dt, input.steer || 0, boost);
@@ -387,7 +409,8 @@ export class World {
 
     const cause = this._hazardAt(snake, snake.x, snake.z, false);
     if (cause) return this._killRival(rival, cause);
-    if (this.player.hitsBody(snake.x, snake.z, snake.headRadius, 0) >= 0) {
+    // `grab` is the kraken's tentacles: a rival dies well before it touches.
+    if (this.player.hitsBody(snake.x, snake.z, snake.headRadius + this.form.grab, 0) >= 0) {
       this.kills++;
       this.score += 60;
       this.events.push({ type: 'kill', x: snake.x, z: snake.z });
@@ -404,10 +427,12 @@ export class World {
   }
 
   _eatCheck(snake, isPlayer) {
+    // Two heads pick food up from further out; rivals always use the plain reach.
+    const reachScale = isPlayer ? this.form.reach : 1;
     for (let i = 0; i < this.foods.length; i++) {
       const f = this.foods[i];
       const dx = f.x - snake.x, dz = f.z - snake.z;
-      const reach = f.radius + snake.headRadius;
+      const reach = (f.radius + snake.headRadius) * reachScale;
       if (dx * dx + dz * dz > reach * reach) continue;
 
       snake.grow(f.growth);
@@ -418,6 +443,7 @@ export class World {
         this.eaten++;
         this.stamina = Math.min(1, this.stamina + (f.golden ? 0.35 : 0.12));
         this.events.push({ type: 'eat', x: f.x, z: f.z, golden: f.golden, combo: this.combo });
+        if (f.blue) this._morph();
       } else {
         this.events.push({ type: 'rivalEat', x: f.x, z: f.z });
       }

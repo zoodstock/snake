@@ -37,6 +37,7 @@ src/camera.js           third-person chase camera
 src/sim/math.js         scalars, angles, stick → turn rate (no DOM, no GL)
 src/sim/snake.js        head movement, trail, body sampling
 src/sim/world.js        arena, food, obstacles, rival AI, collisions, scoring
+src/sim/forms.js        what a blue apple turns you into, and what that changes
 
 src/render/renderer.js  three.js scene: lights, ground, instanced box batches
 src/render/palette.js   colours, as hex numbers
@@ -80,6 +81,16 @@ Rules that are easy to break by accident:
   the keyboard path after the stick path had been fixed. **Never reason it out;
   measure it** (see **Verifying changes**), and check every input path, not just the
   one being changed.
+- **A blue apple changes the player's shape, and the shape is a stat block.** The
+  three forms in `src/sim/forms.js` are pure numbers — reach, grab, boost economy —
+  read through `world.form`, and they last until the next blue apple rather than on a
+  timer. `nextForm` never returns the shape already worn, so every apple visibly does
+  something. Keep the abilities in the form table; don't special-case a form id in
+  `world.js`.
+- The renderer draws a form by *adding trim* to the ordinary snake (`_addFormTrim`),
+  so a new form costs a colour set and a trim branch, not a new mesh. The `glow` batch
+  is the tight one: the abyss flecks are strided by body length precisely so a long
+  snake cannot overflow it, and `npm test` prints the per-form peak against capacity.
 
 Tuning constants live in `CFG` in `src/sim/world.js` and `DEFAULTS` in `src/sim/snake.js`.
 
@@ -87,7 +98,7 @@ Tuning constants live in `CFG` in `src/sim/world.js` and `DEFAULTS` in `src/sim/
 
 `npm test` runs two suites, neither needing a browser or network:
 
-- `tests/logic.test.mjs` — 35 simulation tests, deterministic (`World` takes a seed).
+- `tests/logic.test.mjs` — 44 simulation tests, deterministic (`World` takes a seed).
 - `tests/renderer.smoke.mjs` — drives the real renderer over a real simulation with
   three.js swapped for `tests/three-stub.mjs` (resolved by a loader hook). It proves
   the renderer runs and produces finite transforms inside its instance budgets. It

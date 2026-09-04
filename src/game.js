@@ -205,6 +205,10 @@ export class Game {
         const gained = (e.golden ? 30 : 10) * e.combo;
         this.hud.flash('+' + gained + (e.combo > 1 ? ' ×' + e.combo : ''), e.golden);
         this.camera.kick(0.08);
+      } else if (e.type === 'morph') {
+        this.sfx.golden();
+        this.hud.flash(e.form.toUpperCase() + '!', true);
+        this.camera.kick(0.3);
       } else if (e.type === 'kill') {
         this.sfx.kill();
         this.hud.flash('rival crushed +60', true);

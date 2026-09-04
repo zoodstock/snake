@@ -241,7 +241,33 @@ export class Renderer {
     batch.commit();
   }
 
-  _addSnake(snake, colors, boosting) {
+  /**
+   * Place a box in the snake's local frame: +z is straight ahead, +x is its left.
+   * `yawExtra` tilts the box itself without moving it, which is how the twin form
+   * splays its two heads apart.
+   */
+  _place(batch, snake, baseY, lx, ly, lz, scale, hex, yawExtra) {
+    const [wx, wz] = rotateY(lx, lz, snake.yaw);
+    batch.add(snake.x + wx, baseY + ly, snake.z + wz, scale, snake.yaw + (yawExtra || 0), hex);
+  }
+
+  /** One head: skull, crest, eyes and a flicking tongue. Twin snakes get two. */
+  _addHead(snake, colors, headHex, headSize, headY, side, tilt) {
+    const batch = this.bodies;
+    const put = (target, lx, ly, lz, scale, hex) =>
+      this._place(target, snake, headY, lx + side, ly, lz, scale, hex, tilt);
+
+    put(batch, 0, 0, 0, [headSize, headSize * 0.84, headSize * 1.3], headHex);
+    put(batch, 0, headSize * 0.44, -0.1, [headSize * 0.42, 0.26, headSize], colors[1]);
+    for (const eye of [-1, 1]) {
+      put(this.glow, eye * 0.4, 0.28, 0.46, 0.34, PALETTE.eye);
+      put(batch, eye * 0.4, 0.28, 0.63, [0.19, 0.19, 0.07], PALETTE.pupil);
+    }
+    const flick = 0.28 + Math.max(0, Math.sin(snake.phase * 0.7)) * 0.35;
+    put(this.glow, 0, -0.16, 0.62 + flick * 0.5, [0.09, 0.07, flick], PALETTE.tongue);
+  }
+
+  _addSnake(snake, colors, boosting, form) {
     const batch = this.bodies;
     const body = snake.body;
     const total = Math.max(1, body.length);
@@ -261,23 +287,98 @@ export class Renderer {
 
     // Head, crest, eyes and tongue in the head's local frame. The chase camera
     // mostly sees the head from behind, so the silhouette has to do the work.
-    const headSize = 1.44;
+    const headSize = form === 'kraken' ? 1.72 : 1.44;
     const headY = headSize * 0.5 + Math.sin(snake.phase) * 0.06 + 0.05;
     const headHex = glowT ? brighten(colors[2], glowT * 0.7) : colors[2];
-    batch.add(snake.x, headY, snake.z,
-      [headSize, headSize * 0.84, headSize * 1.3], snake.yaw, headHex);
 
-    const place = (target, lx, ly, lz, scale, hex) => {
-      const [wx, wz] = rotateY(lx, lz, snake.yaw);
-      target.add(snake.x + wx, headY + ly, snake.z + wz, scale, snake.yaw, hex);
-    };
-    place(batch, 0, headSize * 0.44, -0.1, [headSize * 0.42, 0.26, headSize], colors[1]);
-    for (const side of [-1, 1]) {
-      place(this.glow, side * 0.4, 0.28, 0.46, 0.34, PALETTE.eye);
-      place(batch, side * 0.4, 0.28, 0.63, [0.19, 0.19, 0.07], PALETTE.pupil);
+    if (form === 'twin') {
+      // The neck forks: two heads side by side, each canted outward.
+      for (const side of [-1, 1]) {
+        this._addHead(snake, colors, headHex, headSize * 0.82, headY, side * 0.62, side * 0.34);
+      }
+    } else {
+      this._addHead(snake, colors, headHex, headSize, headY, 0, 0);
     }
-    const flick = 0.28 + Math.max(0, Math.sin(snake.phase * 0.7)) * 0.35;
-    place(this.glow, 0, -0.16, 0.62 + flick * 0.5, [0.09, 0.07, flick], PALETTE.tongue);
+
+    if (form && form !== 'snake') this._addFormTrim(snake, colors, form, headSize, headY);
+  }
+
+  /** The bits that make each shape recognisable on top of the shared snake. */
+  _addFormTrim(snake, colors, form, headSize, headY) {
+    const batch = this.bodies;
+    const put = (target, lx, ly, lz, scale, hex, tilt) =>
+      this._place(target, snake, headY, lx, ly, lz, scale, hex, tilt);
+
+    if (form === 'kraken') {
+      // A pale jaw hung under the skull, with a row of teeth along it.
+      put(batch, 0, -headSize * 0.4, 0.26, [headSize * 1.02, 0.44, headSize * 1.16],
+        PALETTE.krakenMaw);
+      for (let t = 0; t < 6; t++) {
+        const lx = (t - 2.5) * 0.3;
+        put(batch, lx, -headSize * 0.16, 0.82, [0.18, 0.44, 0.18], PALETTE.krakenMaw);
+      }
+      // Six tentacles off the jaw, each a tapering chain that undulates. They have
+      // to be long and thick enough to read as limbs — at a quarter of this size
+      // they looked like crumbs scattered round the head.
+      for (let t = 0; t < 6; t++) {
+        const spread = -1.5 + t * 0.6;
+        // Alternate limbs ride higher, and the undulation is gentle enough that a
+        // chain still reads as one limb: at six overlapping arcs it was a pile.
+        const lift = (t % 2) ? 0.3 : -0.02;
+        for (let k = 0; k < 5; k++) {
+          const wave = Math.sin(snake.phase * 1.5 - k * 0.85 + t * 1.1) * 0.2;
+          const out = spread + wave * (0.25 + k * 0.12);
+          const reach = 0.75 + k * 0.66;
+          put(batch,
+            Math.sin(out) * reach,
+            -headSize * 0.14 + lift - k * 0.12,
+            0.45 + Math.cos(out) * reach * 0.7,
+            [0.46 - k * 0.06, 0.44 - k * 0.06, 0.82 - k * 0.1],
+            PALETTE.krakenTentacle, out * 0.75);
+        }
+      }
+      return;
+    }
+
+    if (form === 'abyss') {
+      // Two long feelers with lit tips, the way the reference carries its lures.
+      for (const side of [-1, 1]) {
+        for (let k = 0; k < 3; k++) {
+          const sway = Math.sin(snake.phase * 1.1 + k * 0.7 + side) * 0.22;
+          put(batch, side * (0.3 + k * 0.24) + sway * side, 0.62 + k * 0.42,
+            0.5 + k * 0.5, [0.1, 0.1, 0.5], PALETTE.abyssVent);
+        }
+        const sway = Math.sin(snake.phase * 1.1 + 2.1 + side) * 0.22;
+        put(this.glow, side * 1.02 + sway * side, 1.9, 2.0, 0.3, PALETTE.abyssLure);
+      }
+      // Flecks down the flanks and vents glowing between the plates. Strided so a
+      // long snake cannot blow the glow batch's budget.
+      const body = snake.body;
+      const stride = Math.max(2, Math.ceil(body.length / 14));
+      for (let i = 0; i < body.length; i += stride) {
+        const seg = body[i];
+        const wave = Math.sin(snake.phase - i * 0.55);
+        const y = 0.5 + wave * 0.12 + 0.34;
+        const [ox, oz] = rotateY(0.42, 0, seg.yaw);
+        this.glow.add(seg.x + ox, y, seg.z + oz, 0.16, seg.yaw, PALETTE.abyssSpot);
+        this.glow.add(seg.x - ox, y, seg.z - oz, 0.16, seg.yaw, PALETTE.abyssSpot);
+        if (i % (stride * 2) === 0) {
+          this.glow.add(seg.x, y - 0.34, seg.z, [0.5, 0.1, 0.24], seg.yaw, PALETTE.abyssVent);
+        }
+      }
+      return;
+    }
+
+    if (form === 'twin') {
+      // Banding down the back, so the second head reads as part of one animal.
+      const body = snake.body;
+      for (let i = 1; i < body.length; i += 3) {
+        const seg = body[i];
+        const wave = Math.sin(snake.phase - i * 0.55);
+        this.bodies.add(seg.x, 0.5 + wave * 0.12 + 0.4, seg.z,
+          [0.86, 0.16, 0.34], seg.yaw, PALETTE.twinBand);
+      }
+    }
   }
 
   _fill(world) {
@@ -288,12 +389,15 @@ export class Renderer {
     const beacons = this.beacons.clear();
 
     for (const f of world.foods) {
-      const hex = f.golden ? PALETTE.foodGold : PALETTE.food;
+      const hex = f.blue ? PALETTE.foodBlue : f.golden ? PALETTE.foodGold : PALETTE.food;
       const bob = Math.sin(f.phase) * 0.22;
-      const size = f.golden ? 1.05 : 0.85;
+      const size = f.blue ? 1.15 : f.golden ? 1.05 : 0.85;
       glow.add(f.x, 1.05 + bob, f.z, size, f.phase * 0.9, hex);
       bodies.add(f.x, 1.05 + bob + size * 0.62, f.z, [0.16, 0.3, 0.16], f.phase * 0.9, PALETTE.grassLine);
-      beacons.add(f.x, 3.2, f.z, [size * 1.7, 6.4, size * 1.7], 0, hex);
+      // A blue apple is rare and worth crossing the arena for, so its beacon is
+      // taller than the rest.
+      const column = f.blue ? 9.5 : 6.4;
+      beacons.add(f.x, column * 0.5, f.z, [size * 1.7, column, size * 1.7], 0, hex);
     }
 
     for (const rival of world.rivals) {
@@ -302,9 +406,10 @@ export class Renderer {
         rival.snake.boosting);
     }
     if (world.player.alive) {
-      this._addSnake(world.player,
-        [PALETTE.playerBody[0], PALETTE.playerBody[1], PALETTE.playerHead],
-        world.player.boosting);
+      const form = world.formId || 'snake';
+      const colors = PALETTE.forms[form] ||
+        [PALETTE.playerBody[0], PALETTE.playerBody[1], PALETTE.playerHead];
+      this._addSnake(world.player, colors, world.player.boosting, form);
     }
 
     for (const p of world.particles) {
