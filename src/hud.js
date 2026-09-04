@@ -27,6 +27,7 @@ export class Hud {
       best: $('best'),
       combo: $('combo'),
       rivals: $('rivals'),
+      form: $('form'),
       boost: $('boostFill'),
     };
     this.flashEl = $('flash');
@@ -65,6 +66,11 @@ export class Hud {
     set('best', this.stats.best, Math.max(best, world.score));
     set('rivals', this.stats.rivals, world.rivals.reduce((n, r) => n + (r.snake.alive ? 1 : 0), 0));
     set('combo', this.stats.combo, world.combo > 1 ? '×' + world.combo : '');
+    set('form', this.stats.form, world.form.name);
+    if (this.stats.form) {
+      // Tint it while you are wearing something a blue apple gave you.
+      this.stats.form.classList.toggle('changed', world.formId !== 'snake');
+    }
 
     if (this.stats.boost) {
       const pct = Math.round(world.stamina * 100);
@@ -107,7 +113,9 @@ export class Hud {
     if (!o.root) return;
     if (kind === 'menu') {
       o.title.textContent = 'BLOCK SNAKE';
-      o.body.innerHTML = 'You <strong>are</strong> the snake. Grow, dodge blocks, outlive the rivals.';
+      o.body.innerHTML = 'You <strong>are</strong> the snake. Grow, dodge blocks, outlive the rivals.' +
+        '<span class="stats">A <strong>blue apple</strong> turns you into a kraken, an abyss ' +
+        'creature or a two-headed snake — and it lasts until you find the next one.</span>';
       o.hint.innerHTML = 'Click <strong>Slither</strong> to start, then <kbd>A</kbd><kbd>D</kbd> or ' +
         '<kbd>←</kbd><kbd>→</kbd> to steer &nbsp;·&nbsp; <kbd>Shift</kbd> to boost &nbsp;·&nbsp; ' +
         '<kbd>J</kbd> for the stick';

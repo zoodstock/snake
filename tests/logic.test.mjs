@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import * as M3 from '../src/sim/math.js';
 import { Snake } from '../src/sim/snake.js';
 import { World } from '../src/sim/world.js';
+import { FORMS, MORPHS, nextForm } from '../src/sim/forms.js';
 // The chase camera is pure maths over sim/math.js, so the stick tests can drive
 // the real one rather than a stand-in that cannot reproduce the bug below.
 import { ChaseCamera } from '../src/camera.js';
@@ -115,6 +116,145 @@ test('a quarter turn to the right lands on the screen-right heading', () => {
   }
   assert.ok(Math.abs(M3.angleDelta(want, s.yaw)) < 0.02,
     'ended at ' + s.yaw.toFixed(3) + ', wanted ' + want.toFixed(3));
+});
+
+console.log('forms');
+
+/** Drop a single apple just ahead of the player and run until it is eaten. */
+function feed(w, extra) {
+  w.foods = [Object.assign({
+    x: w.player.x, z: w.player.z + 4,
+    golden: false, blue: false, value: 10, growth: 3, radius: 0.5, phase: 0,
+  }, extra || {})];
+  for (let i = 0; i < 180; i++) {
+    const events = w.update(1 / 60, { steer: 0 });
+    const hit = events.filter((e) => e.type === 'eat' || e.type === 'morph');
+    if (hit.length) return hit;
+  }
+  return [];
+}
+
+test('a blue apple turns up occasionally, not constantly', () => {
+  const w = new World({ seed: 5 });
+  let blue = 0;
+  for (let i = 0; i < 2000; i++) if (w._makeFood().blue) blue++;
+  assert.ok(blue > 20, 'blue apples do appear, saw ' + blue + ' in 2000');
+  assert.ok(blue < 300, 'but they stay rare, saw ' + blue + ' in 2000');
+});
+
+test('a blue apple never doubles as a golden one', () => {
+  const w = new World({ seed: 6 });
+  for (let i = 0; i < 2000; i++) {
+    const f = w._makeFood();
+    assert.ok(!(f.blue && f.golden), 'an apple is one kind or the other');
+  }
+});
+
+test('eating a blue apple takes one of the three shapes', () => {
+  const w = new World({ seed: 7 });
+  w.obstacles.length = 0;
+  w.rivals.length = 0;
+  assert.strictEqual(w.formId, 'snake', 'the run starts as a plain snake');
+
+  const events = feed(w, { blue: true, value: 15, growth: 2, radius: 0.7 });
+  assert.ok(events.some((e) => e.type === 'morph'), 'a morph event fires');
+  assert.ok(MORPHS.includes(w.formId), 'became one of the three, got ' + w.formId);
+});
+
+test('every blue apple changes the shape to a different one', () => {
+  const w = new World({ seed: 8 });
+  w.obstacles.length = 0;
+  w.rivals.length = 0;
+  let previous = w.formId;
+  for (let i = 0; i < 12; i++) {
+    feed(w, { blue: true, value: 15, growth: 2, radius: 0.7 });
+    assert.notStrictEqual(w.formId, previous, 'apple ' + i + ' left the shape unchanged');
+    previous = w.formId;
+  }
+});
+
+test('nextForm never returns the shape already worn', () => {
+  let n = 0;
+  const rand = () => ((n = (n * 9301 + 49297) % 233280) / 233280);
+  for (const current of ['snake', ...MORPHS]) {
+    for (let i = 0; i < 50; i++) {
+      const got = nextForm(current, rand);
+      assert.ok(MORPHS.includes(got), 'returned a real form');
+      assert.notStrictEqual(got, current);
+    }
+  }
+});
+
+test('a shape is kept until the next blue apple, and dropped on reset', () => {
+  const w = new World({ seed: 9 });
+  w.obstacles.length = 0;
+  w.rivals.length = 0;
+  feed(w, { blue: true, value: 15, growth: 2, radius: 0.7 });
+  const worn = w.formId;
+  assert.ok(MORPHS.includes(worn));
+
+  // Plain apples and plain time must not wear it off.
+  for (let i = 0; i < 4; i++) feed(w);
+  for (let i = 0; i < 600; i++) w.update(1 / 60, { steer: 0.2 });
+  assert.strictEqual(w.formId, worn, 'the shape lasts until the next blue apple');
+
+  w.reset();
+  assert.strictEqual(w.formId, 'snake', 'a new run starts plain');
+});
+
+test('the kraken kills rivals its tentacles reach, a plain snake does not', () => {
+  const reachOf = (formId) => {
+    const w = new World({ seed: 25 });
+    w.obstacles.length = 0;
+    w.foods.length = 0;
+    w.formId = formId;
+    const rival = w.rivals[0];
+    w.rivals.length = 1;
+    // Park the rival off to the side of a mid-body segment. Plain reach is
+    // bodyRadius + headRadius = 1.08, and a rival closes about 0.19 in the frame
+    // before the check, so 1.6 is clear of one and well inside the kraken's.
+    const seg = w.player.body[4];
+    rival.snake.x = seg.x + 1.6;
+    rival.snake.z = seg.z;
+    rival.snake.rebuildBody();
+    return w.update(1 / 60, { steer: 0 }).some((e) => e.type === 'kill');
+  };
+  assert.strictEqual(reachOf('snake'), false, 'a plain snake cannot reach that far');
+  assert.strictEqual(reachOf('kraken'), true, 'the kraken can');
+  assert.ok(FORMS.kraken.grab > FORMS.snake.grab, 'and says so in its stats');
+});
+
+test('two heads pick food up from further out', () => {
+  const eatsFrom = (formId, sideways) => {
+    const w = new World({ seed: 11 });
+    w.obstacles.length = 0;
+    w.rivals.length = 0;
+    w.formId = formId;
+    w.foods = [{
+      x: w.player.x + sideways, z: w.player.z,
+      golden: false, blue: false, value: 10, growth: 3, radius: 0.5, phase: 0,
+    }];
+    return w.update(1 / 60, { steer: 0 }).some((e) => e.type === 'eat');
+  };
+  assert.strictEqual(eatsFrom('snake', 1.6), false, 'a plain snake misses it');
+  assert.strictEqual(eatsFrom('twin', 1.6), true, 'two heads reach it');
+  assert.ok(FORMS.twin.reach > FORMS.snake.reach);
+});
+
+test('the abyss form boosts longer than a plain snake', () => {
+  const staminaAfter = (formId) => {
+    const w = new World({ seed: 12 });
+    w.obstacles.length = 0;
+    w.rivals.length = 0;
+    w.foods.length = 0;
+    w.formId = formId;
+    for (let i = 0; i < 60; i++) w.update(1 / 60, { steer: 0, boost: true });
+    return w.stamina;
+  };
+  const plain = staminaAfter('snake');
+  const abyss = staminaAfter('abyss');
+  assert.ok(abyss > plain, 'abyss drains less: ' + abyss.toFixed(3) + ' vs ' + plain.toFixed(3));
+  assert.ok(FORMS.abyss.boostSpeed > 1, 'and runs harder while boosting');
 });
 
 console.log('snake');

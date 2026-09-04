@@ -11,6 +11,7 @@
  */
 import { World } from '../src/sim/world.js';
 import { ChaseCamera } from '../src/camera.js';
+import { MORPHS } from '../src/sim/forms.js';
 
 // Minimal DOM for the canvas textures the renderer builds.
 const ctx2d = {
@@ -56,7 +57,27 @@ for (let i = 0; i < 120; i++) {
   maxBodies = Math.max(maxBodies, renderer.bodies.n);
 }
 
+// Every shape a blue apple can grant, at full length: the trim each one adds is
+// the other capacity worst case, and the glow batch is the tight one.
+const formPeaks = {};
+for (const form of MORPHS) {
+  world.reset();
+  world.formId = form;
+  world.player.grow(220);
+  for (let i = 0; i < 60; i++) {
+    world.update(1 / 60, { steer: 0.25, boost: i % 20 < 8 });
+    camera.update(1 / 60, world.player, true);
+    renderer.render(world, camera);
+    maxBodies = Math.max(maxBodies, renderer.bodies.n);
+    maxGlow = Math.max(maxGlow, renderer.glow.n);
+    formPeaks[form] = Math.max(formPeaks[form] || 0, renderer.glow.n);
+  }
+  if (world.formId !== form) throw new Error('the form changed itself while rendering: ' + form);
+}
+
 const cap = { bodies: renderer.bodies.capacity, scenery: renderer.scenery.capacity, glow: renderer.glow.capacity };
+console.log('form glow peaks      :', Object.entries(formPeaks).map(([k, v]) => k + ' ' + v).join(', '),
+  '/ ' + renderer.glow.capacity);
 console.log('frames rendered      :', THREE.stats.renders);
 console.log('instances written    :', THREE.stats.matrices, 'matrices,', THREE.stats.colors, 'colors');
 console.log('peak scenery         :', maxScenery, '/', cap.scenery);
